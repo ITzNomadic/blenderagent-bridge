@@ -14,23 +14,39 @@ from .objects import _find_object
 
 def handle_set_material(params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
     """Configure or create a Principled BSDF material and assign it to an object."""
-    name = params.get("name")
-    obj = _find_object(name)
-
     raw_color = params.get("color", [0.8, 0.8, 0.8, 1.0])
     if not isinstance(raw_color, (list, tuple)) or len(raw_color) not in (3, 4):
         raise InvalidArgumentError("Color must be a list of 3 (RGB) or 4 (RGBA) numbers in [0.0, 1.0].")
 
-    color_floats = [max(0.0, min(1.0, float(c))) for c in raw_color]
+    import math
+    color_floats = []
+    for idx, c in enumerate(raw_color):
+        try:
+            fc = float(c)
+            if not math.isfinite(fc) or not (0.0 <= fc <= 1.0):
+                raise ValueError()
+            color_floats.append(fc)
+        except Exception:
+            raise InvalidArgumentError(f"Color component at index {idx} must be a finite float in [0.0, 1.0], got {c}.")
+
     if len(color_floats) == 3:
         color_floats.append(1.0)  # Alpha default
     color_rgba = tuple(color_floats)
 
     try:
-        metallic = max(0.0, min(1.0, float(params.get("metallic", 0.0))))
-        roughness = max(0.0, min(1.0, float(params.get("roughness", 0.5))))
-    except (TypeError, ValueError) as err:
-        raise InvalidArgumentError(f"Metallic and Roughness must be numbers in [0.0, 1.0]: {err}")
+        raw_m = float(params.get("metallic", 0.0))
+        raw_r = float(params.get("roughness", 0.5))
+        if not (math.isfinite(raw_m) and 0.0 <= raw_m <= 1.0):
+            raise ValueError(f"Invalid metallic value '{raw_m}'")
+        if not (math.isfinite(raw_r) and 0.0 <= raw_r <= 1.0):
+            raise ValueError(f"Invalid roughness value '{raw_r}'")
+        metallic = raw_m
+        roughness = raw_r
+    except Exception as err:
+        raise InvalidArgumentError(f"Metallic and Roughness must be finite floats in [0.0, 1.0]: {err}")
+
+    name = params.get("name")
+    obj = _find_object(name)
 
     mat_name = params.get("material_name") or f"{obj.name}_Material"
     if not isinstance(mat_name, str) or not mat_name.strip():

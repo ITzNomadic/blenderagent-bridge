@@ -112,3 +112,56 @@ def test_save_project_input():
     inp = SaveProjectInput(filename="my_scene.blend", overwrite=True)
     assert inp.filename == "my_scene.blend"
     assert inp.overwrite is True
+
+
+def test_primitive_location_rejects_nan_and_inf():
+    with pytest.raises(ValidationError):
+        CreatePrimitiveInput(type="cube", location=[float("nan"), 0.0, 0.0])
+
+    with pytest.raises(ValidationError):
+        CreatePrimitiveInput(type="cube", location=[0.0, float("inf"), 0.0])
+
+    with pytest.raises(ValidationError):
+        CreatePrimitiveInput(type="cube", location=[0.0, 0.0, float("-inf")])
+
+
+def test_primitive_scale_rejects_zero_and_nan():
+    with pytest.raises(ValidationError):
+        CreatePrimitiveInput(type="cube", scale=[0.0, 1.0, 1.0])
+
+    with pytest.raises(ValidationError):
+        CreatePrimitiveInput(type="cube", scale=[1.0, float("nan"), 1.0])
+
+
+def test_transform_rejects_nan_rotation_and_scale():
+    with pytest.raises(ValidationError):
+        TransformObjectInput(name="Cube", rotation=[0.0, float("nan"), 90.0])
+
+    with pytest.raises(ValidationError):
+        TransformObjectInput(name="Cube", scale=[float("inf"), 1.0, 1.0])
+
+
+def test_material_rejects_nan_color_metallic_roughness():
+    with pytest.raises(ValidationError):
+        SetMaterialInput(name="Cube", color=[float("nan"), 0.5, 0.5])
+
+    with pytest.raises(ValidationError):
+        SetMaterialInput(name="Cube", color=[0.5, 0.5, 0.5], metallic=float("nan"))
+
+    with pytest.raises(ValidationError):
+        SetMaterialInput(name="Cube", color=[0.5, 0.5, 0.5], roughness=float("inf"))
+
+
+def test_camera_rejects_invalid_focal_length_and_nan_vectors():
+    with pytest.raises(ValidationError):
+        SetCameraInput(focal_length=float("nan"))
+
+    with pytest.raises(ValidationError):
+        SetCameraInput(focal_length=0.5)  # Min is 1.0
+
+    with pytest.raises(ValidationError):
+        SetCameraInput(focal_length=600.0)  # Max is 500.0
+
+    with pytest.raises(ValidationError):
+        SetCameraInput(location=[float("nan"), 1.0, 1.0])
+

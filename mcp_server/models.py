@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
@@ -20,6 +21,18 @@ class ResponseEnvelope(BaseModel):
     request_id: Optional[str] = Field(default=None, description="Traceability request ID")
 
 
+def _validate_finite_3d_vector(v: Optional[List[float]], field_name: str) -> Optional[List[float]]:
+    """Helper to strictly validate 3D vector coordinates."""
+    if v is None:
+        return None
+    if len(v) != 3:
+        raise ValueError(f"'{field_name}' must contain exactly 3 coordinates [x, y, z].")
+    for idx, x in enumerate(v):
+        if not isinstance(x, (int, float)) or not math.isfinite(x):
+            raise ValueError(f"'{field_name}' coordinate at index {idx} must be a finite number, got {x}.")
+    return v
+
+
 # --- Input Parameter Schemas ---
 
 class CreatePrimitiveInput(BaseModel):
@@ -34,12 +47,20 @@ class CreatePrimitiveInput(BaseModel):
         default=[1.0, 1.0, 1.0], description="[sx, sy, sz] scaling factors"
     )
 
-    @field_validator("location", "scale")
+    @field_validator("location")
     @classmethod
-    def validate_3d_vector(cls, v: Optional[List[float]]) -> Optional[List[float]]:
-        if v is not None and len(v) != 3:
-            raise ValueError("Vector must have exactly 3 float coordinates [x, y, z].")
-        return v
+    def validate_location(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_finite_3d_vector(v, "location")
+
+    @field_validator("scale")
+    @classmethod
+    def validate_scale(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        vec = _validate_finite_3d_vector(v, "scale")
+        if vec is not None:
+            for idx, s in enumerate(vec):
+                if abs(s) < 1e-6:
+                    raise ValueError(f"'scale' factor at index {idx} cannot be zero (too close to 0.0).")
+        return vec
 
 
 class TransformObjectInput(BaseModel):
@@ -54,12 +75,25 @@ class TransformObjectInput(BaseModel):
         default=None, description="New [sx, sy, sz] scale factors"
     )
 
-    @field_validator("location", "rotation", "scale")
+    @field_validator("location")
     @classmethod
-    def validate_3d_transform(cls, v: Optional[List[float]]) -> Optional[List[float]]:
-        if v is not None and len(v) != 3:
-            raise ValueError("Transform vector must contain exactly 3 floats.")
-        return v
+    def validate_location(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_finite_3d_vector(v, "location")
+
+    @field_validator("rotation")
+    @classmethod
+    def validate_rotation(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_finite_3d_vector(v, "rotation")
+
+    @field_validator("scale")
+    @classmethod
+    def validate_scale(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        vec = _validate_finite_3d_vector(v, "scale")
+        if vec is not None:
+            for idx, s in enumerate(vec):
+                if abs(s) < 1e-6:
+                    raise ValueError(f"'scale' factor at index {idx} cannot be zero (too close to 0.0).")
+        return vec
 
 
 class SetMaterialInput(BaseModel):
@@ -81,11 +115,22 @@ class SetMaterialInput(BaseModel):
     @classmethod
     def validate_color(cls, v: List[float]) -> List[float]:
         if len(v) not in (3, 4):
-            raise ValueError("Color must be a list of 3 (RGB) or 4 (RGBA) floats.")
-        for c in v:
+            raise ValueError("Color must be a list of 3 (RGB) or 4 (RGBA) numbers.")
+        for idx, c in enumerate(v):
+            if not isinstance(c, (int, float)) or not math.isfinite(c):
+                raise ValueError(f"Color component at index {idx} must be a finite number, got {c}.")
             if not (0.0 <= c <= 1.0):
-                raise ValueError("Color components must be in normalized range [0.0, 1.0].")
+                raise ValueError(f"Color component at index {idx} ({c}) must be in normalized range [0.0, 1.0].")
         return v
+
+    @field_validator("metallic", "roughness")
+    @classmethod
+    def validate_factor(cls, v: float) -> float:
+        if not isinstance(v, (int, float)) or not math.isfinite(v):
+            raise ValueError("Material factor must be a finite number.")
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(f"Material factor must be between 0.0 and 1.0, got {v}.")
+        return float(v)
 
 
 class SetCameraInput(BaseModel):
@@ -100,6 +145,26 @@ class SetCameraInput(BaseModel):
         default=50.0, ge=1.0, le=500.0, description="Lens focal length in millimeters"
     )
     make_active: Optional[bool] = Field(default=True, description="Whether to make this the active scene camera")
+
+    @field_validator("location")
+    @classmethod
+    def validate_location(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_finite_3d_vector(v, "location")
+
+    @field_validator("rotation")
+    @classmethod
+    def validate_rotation(cls, v: Optional[List[float]]) -> Optional[List[float]]:
+        return _validate_finite_3d_vector(v, "rotation")
+
+    @field_validator("focal_length")
+    @classmethod
+    def validate_focal_length(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None:
+            if not isinstance(v, (int, float)) or not math.isfinite(v):
+                raise ValueError("Focal length must be a finite number.")
+            if not (1.0 <= v <= 500.0):
+                raise ValueError(f"Focal length must be between 1.0 and 500.0 mm, got {v}.")
+        return v
 
 
 class RenderPreviewInput(BaseModel):

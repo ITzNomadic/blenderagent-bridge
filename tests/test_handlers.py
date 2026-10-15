@@ -39,3 +39,40 @@ def test_save_project_path_traversal(temp_workspace):
             "save_project",
             {"filename": "../../escape.blend", "workspace_dir": str(temp_workspace)},
         )
+
+
+def test_create_primitive_validation_errors():
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("create_primitive", {"type": 123})
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("create_primitive", {"type": "cube", "location": [1.0, 2.0]})
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("create_primitive", {"type": "cube", "location": [float("nan"), 0.0, 0.0]})
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("create_primitive", {"type": "cube", "scale": [0.0, 1.0, 1.0]})
+
+
+def test_material_validation_errors():
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("set_material", {"name": "Cube", "color": [1.0, 2.0]})  # len != 3 or 4
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("set_material", {"name": "Cube", "color": [float("nan"), 0.0, 0.0]})
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("set_material", {"name": "Cube", "color": [0.5, 0.5, 0.5], "metallic": 1.5})
+
+
+def test_camera_validation_errors():
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("set_camera", {"location": [float("inf"), 0.0, 0.0]})
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("set_camera", {"focal_length": float("nan")})
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("set_camera", {"focal_length": 0.0})
+

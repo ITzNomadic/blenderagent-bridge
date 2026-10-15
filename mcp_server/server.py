@@ -10,6 +10,7 @@ import os
 import pathlib
 import sys
 from typing import Any, Dict, List, Literal, Optional
+from pydantic import ValidationError
 
 # Compatible with both modern MCP 2.x (MCPServer) and 1.x (FastMCP)
 try:
@@ -23,6 +24,7 @@ except ImportError:
 from .client import BlenderBridgeClient
 from .models import (
     CreatePrimitiveInput,
+    ErrorDetail,
     RenderPreviewInput,
     ResponseEnvelope,
     SaveProjectInput,
@@ -40,6 +42,23 @@ def get_client() -> BlenderBridgeClient:
     if _client is None:
         _client = BlenderBridgeClient()
     return _client
+
+
+def _validation_error_response(err: ValidationError) -> Dict[str, Any]:
+    """Format Pydantic validation errors into a standard ResponseEnvelope dictionary."""
+    errors_summary = [
+        {"field": " -> ".join(str(loc) for loc in e.get("loc", [])), "message": e.get("msg")}
+        for e in err.errors(include_url=False)
+    ]
+    return ResponseEnvelope(
+        status="error",
+        error=ErrorDetail(
+            code="VALIDATION_ERROR",
+            message=f"Input parameter validation failed: {err.error_count()} error(s).",
+            details={"validation_errors": errors_summary},
+        ),
+        message="Validation error: check parameter types, ranges, or dimensions.",
+    ).model_dump()
 
 
 def create_mcp_server(
@@ -83,8 +102,14 @@ def create_mcp_server(
     )
     def get_object_info(name: str) -> Dict[str, Any]:
         """Retrieve properties for a specific object by name."""
+        if not name or not isinstance(name, str) or not name.strip():
+            return ResponseEnvelope(
+                status="error",
+                error=ErrorDetail(code="INVALID_ARGUMENT", message="Parameter 'name' must be a non-empty string."),
+                message="Missing required object name.",
+            ).model_dump()
         cl = get_client()
-        resp = cl.send_command("get_object_info", {"name": name})
+        resp = cl.send_command("get_object_info", {"name": name.strip()})
         return resp.model_dump()
 
     @mcp.tool(
@@ -92,7 +117,7 @@ def create_mcp_server(
         description=(
             "Create a standard 3D mesh primitive in the scene. Supported types: "
             "'cube', 'sphere', 'cylinder', 'plane', 'cone', 'torus', 'monkey'. "
-            "Returns the actual assigned name and spatial properties."
+            "Returns the actual assigned name, requested name, collision rename status, and spatial properties."
         ),
     )
     def create_primitive(
@@ -102,14 +127,17 @@ def create_mcp_server(
         scale: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         """Create a 3D primitive mesh."""
+        try:
+            validated = CreatePrimitiveInput(
+                type=type,
+                name=name,
+                location=location or [0.0, 0.0, 0.0],
+                scale=scale or [1.0, 1.0, 1.0],
+            )
+        except ValidationError as err:
+            return _validation_error_response(err)
+
         cl = get_client()
-        # Validate through Pydantic model
-        validated = CreatePrimitiveInput(
-            type=type,
-            name=name,
-            location=location or [0.0, 0.0, 0.0],
-            scale=scale or [1.0, 1.0, 1.0],
-        )
         resp = cl.send_command("create_primitive", validated.model_dump())
         return resp.model_dump()
 
@@ -127,13 +155,17 @@ def create_mcp_server(
         scale: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         """Apply spatial transformations to a named object."""
+        try:
+            validated = TransformObjectInput(
+                name=name,
+                location=location,
+                rotation=rotation,
+                scale=scale,
+            )
+        except ValidationError as err:
+            return _validation_error_response(err)
+
         cl = get_client()
-        validated = TransformObjectInput(
-            name=name,
-            location=location,
-            rotation=rotation,
-            scale=scale,
-        )
         resp = cl.send_command("transform_object", validated.model_dump(exclude_none=True))
         return resp.model_dump()
 
@@ -153,14 +185,18 @@ def create_mcp_server(
         material_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Assign or update a Principled BSDF material."""
+        try:
+            validated = SetMaterialInput(
+                name=name,
+                color=color,
+                metallic=metallic,
+                roughness=roughness,
+                material_name=material_name,
+            )
+        except ValidationError as err:
+            return _validation_error_response(err)
+
         cl = get_client()
-        validated = SetMaterialInput(
-            name=name,
-            color=color,
-            metallic=metallic,
-            roughness=roughness,
-            material_name=material_name,
-        )
         resp = cl.send_command("set_material", validated.model_dump(exclude_none=True))
         return resp.model_dump()
 
@@ -179,14 +215,18 @@ def create_mcp_server(
         make_active: bool = True,
     ) -> Dict[str, Any]:
         """Configure scene camera and basic lighting."""
+        try:
+            validated = SetCameraInput(
+                location=location,
+                rotation=rotation,
+                camera_name=camera_name,
+                focal_length=focal_length,
+                make_active=make_active,
+            )
+        except ValidationError as err:
+            return _validation_error_response(err)
+
         cl = get_client()
-        validated = SetCameraInput(
-            location=location,
-            rotation=rotation,
-            camera_name=camera_name,
-            focal_length=focal_length,
-            make_active=make_active,
-        )
         resp = cl.send_command("set_camera", validated.model_dump(exclude_none=True))
         return resp.model_dump()
 
@@ -204,13 +244,17 @@ def create_mcp_server(
         output_filename: str = "renders/preview.png",
     ) -> Dict[str, Any]:
         """Render a preview image to workspace."""
+        try:
+            validated = RenderPreviewInput(
+                width=width,
+                height=height,
+                samples=samples,
+                output_filename=output_filename,
+            )
+        except ValidationError as err:
+            return _validation_error_response(err)
+
         cl = get_client()
-        validated = RenderPreviewInput(
-            width=width,
-            height=height,
-            samples=samples,
-            output_filename=output_filename,
-        )
         resp = cl.send_command("render_preview", validated.model_dump(exclude_none=True), timeout=60.0)
         return resp.model_dump()
 
@@ -226,11 +270,15 @@ def create_mcp_server(
         overwrite: bool = False,
     ) -> Dict[str, Any]:
         """Save scene to a .blend file in the workspace."""
+        try:
+            validated = SaveProjectInput(
+                filename=filename,
+                overwrite=overwrite,
+            )
+        except ValidationError as err:
+            return _validation_error_response(err)
+
         cl = get_client()
-        validated = SaveProjectInput(
-            filename=filename,
-            overwrite=overwrite,
-        )
         resp = cl.send_command("save_project", validated.model_dump())
         return resp.model_dump()
 

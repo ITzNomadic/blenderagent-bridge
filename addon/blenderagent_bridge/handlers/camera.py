@@ -9,7 +9,8 @@ try:
 except ImportError:
     bpy = None
 
-from ..security import InvalidArgumentError
+from ..security import BlenderAgentError, InvalidArgumentError
+from .objects import _parse_vector_3d
 
 
 def handle_set_camera(params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
@@ -21,7 +22,20 @@ def handle_set_camera(params: Dict[str, Any], context: Any = None) -> Dict[str, 
     location = params.get("location")
     rotation = params.get("rotation")
     make_active = bool(params.get("make_active", True))
-    focal_length = float(params.get("focal_length", 50.0))
+
+    try:
+        raw_fl = float(params.get("focal_length", 50.0))
+        if not (math.isfinite(raw_fl) and 1.0 <= raw_fl <= 500.0):
+            raise ValueError()
+        focal_length = raw_fl
+    except Exception:
+        raise InvalidArgumentError("focal_length must be a finite float between 1.0 and 500.0 mm.")
+
+    parsed_loc = _parse_vector_3d(location, "location") if location is not None else None
+    parsed_rot = _parse_vector_3d(rotation, "rotation") if rotation is not None else None
+
+    if not bpy or not hasattr(bpy, "data"):
+        raise BlenderAgentError("Blender environment not initialized: cannot configure camera.")
 
     cam_obj = bpy.data.objects.get(cam_name)
     if not cam_obj or cam_obj.type != "CAMERA":
@@ -29,22 +43,18 @@ def handle_set_camera(params: Dict[str, Any], context: Any = None) -> Dict[str, 
         cam_obj = bpy.data.objects.new(name=cam_name, object_data=cam_data)
         bpy.context.scene.collection.objects.link(cam_obj)
 
-    if location is not None:
-        if not isinstance(location, (list, tuple)) or len(location) != 3:
-            raise InvalidArgumentError("Location must be a list/tuple of 3 numbers: [x, y, z].")
-        cam_obj.location = (float(location[0]), float(location[1]), float(location[2]))
+    if parsed_loc is not None:
+        cam_obj.location = parsed_loc
 
-    if rotation is not None:
-        if not isinstance(rotation, (list, tuple)) or len(rotation) != 3:
-            raise InvalidArgumentError("Rotation must be a list/tuple of 3 Euler angles in degrees: [rx, ry, rz].")
+    if parsed_rot is not None:
         cam_obj.rotation_euler = (
-            math.radians(float(rotation[0])),
-            math.radians(float(rotation[1])),
-            math.radians(float(rotation[2])),
+            math.radians(parsed_rot[0]),
+            math.radians(parsed_rot[1]),
+            math.radians(parsed_rot[2]),
         )
 
     if hasattr(cam_obj.data, "lens"):
-        cam_obj.data.lens = max(1.0, min(500.0, focal_length))
+        cam_obj.data.lens = focal_length
 
     if make_active:
         bpy.context.scene.camera = cam_obj
