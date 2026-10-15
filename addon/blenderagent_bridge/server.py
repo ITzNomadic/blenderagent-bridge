@@ -144,9 +144,27 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
         if not isinstance(params, dict):
             params = {}
 
-        # Inject authorized workspace directory into params
-        if "workspace_dir" not in params:
-            params["workspace_dir"] = str(self.workspace_dir)
+        # SECURITY: Strictly reject any client attempt to supply or override workspace_dir
+        if "workspace_dir" in params:
+            audit_logger.log(
+                "SECURITY_VIOLATION",
+                "BLOCKED",
+                "Client attempted to supply custom workspace_dir in request parameters.",
+                client_ip,
+            )
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "SECURITY_VIOLATION",
+                    "message": "Specifying 'workspace_dir' in request parameters is strictly prohibited.",
+                },
+                "message": "Security Violation: workspace_dir is governed exclusively by the server.",
+                "request_id": payload.get("request_id"),
+            }, status_code=403)
+            return
+
+        # Inject server-authorized workspace directory
+        params["workspace_dir"] = str(self.workspace_dir)
 
         request_id = payload.get("request_id")
         timeout = float(payload.get("timeout", 30.0))

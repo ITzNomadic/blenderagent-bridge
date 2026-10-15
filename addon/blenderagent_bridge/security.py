@@ -59,43 +59,91 @@ def generate_session_token() -> str:
     return secrets.token_hex(16)
 
 
+WINDOWS_RESERVED_NAMES = {
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+}
+
+
 def validate_workspace_path(
     workspace_dir: str | pathlib.Path,
     target_path_str: str | pathlib.Path,
     allow_create_dir: bool = True,
 ) -> pathlib.Path:
-    """Validate that target_path_str resides strictly within workspace_dir.
+    """Validate that target_path_str resides strictly within authorized workspace_dir.
 
-    Resolves symbolic links and relative segments ('..').
-    Raises SecurityViolationError if the path escapes workspace boundaries.
+    Hardened against:
+    - Path traversal attacks (../, ..\\)
+    - Absolute external path escapes
+    - Windows Alternate Data Streams (ADS colons)
+    - Windows reserved device names (CON, PRN, AUX, NUL, COM*, LPT*)
+    - Illegal filesystem characters (*, ?, <, >, |, ")
+    - Shared prefix collision attacks (e.g., workspace_evil vs workspace)
+    - Symlink / junction breakout attacks
     """
     if not workspace_dir:
         raise SecurityViolationError("Workspace directory is not configured.")
 
     base = pathlib.Path(workspace_dir).resolve()
 
-    # Reject null bytes or empty strings
     raw_str = str(target_path_str).strip()
     if not raw_str or "\x00" in raw_str:
         raise InvalidArgumentError("Invalid or empty file path.")
 
-    # Target path handling
+    # Check for illegal characters (*, ?, <, >, |, ") in filename
+    clean_check = raw_str.replace("\\", "/").split("/")
+    for segment in clean_check:
+        segment = segment.strip()
+        if not segment:
+            continue
+        # Check colon in non-drive-letter segment (ADS attack)
+        if ":" in segment:
+            # Only drive letter on Windows (e.g. 'C:') is valid at index 0
+            if clean_check.index(segment) != 0 or len(segment) != 2:
+                raise SecurityViolationError(f"Prohibited stream or colon in path segment: '{segment}'.")
+
+        # Check Windows reserved device names
+        stem = segment.split(".")[0].upper()
+        if stem in WINDOWS_RESERVED_NAMES:
+            raise SecurityViolationError(f"Prohibited reserved system device name in path: '{segment}'.")
+
+        # Check wildcards or pipe
+        if any(c in segment for c in ('*', '?', '<', '>', '|', '"')):
+            raise InvalidArgumentError(f"Prohibited filesystem characters in path: '{segment}'.")
+
+    # Canonicalize target path
     candidate = pathlib.Path(raw_str)
     if candidate.is_absolute():
         target = candidate.resolve()
     else:
         target = (base / candidate).resolve()
 
-    # Verify containment
+    # Enforce strict hierarchy containment
     try:
-        target.relative_to(base)
-    except ValueError:
+        is_contained = target.is_relative_to(base)
+    except AttributeError:
+        # Fallback for Python < 3.9
+        try:
+            target.relative_to(base)
+            is_contained = True
+        except ValueError:
+            is_contained = False
+
+    if not is_contained:
         raise SecurityViolationError(
-            f"Path traversal detected: '{raw_str}' resolves outside workspace '{base}'."
+            f"Path traversal detected: '{raw_str}' resolves to '{target}', outside workspace '{base}'."
         )
+
+    # Prevent target from being the workspace directory itself
+    if target == base:
+        raise SecurityViolationError("Target file path cannot be the workspace root directory itself.")
 
     if allow_create_dir:
         target.parent.mkdir(parents=True, exist_ok=True)
+        # Verify created parent is still within workspace
+        if not target.parent.resolve().is_relative_to(base):
+            raise SecurityViolationError("Directory traversal detected during path parent creation.")
 
     return target
 

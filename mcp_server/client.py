@@ -74,10 +74,6 @@ class BlenderBridgeClient:
             "timeout": timeout - 2.0,
         }
 
-        # Include authorized workspace in parameters
-        if "workspace_dir" not in payload["params"]:
-            payload["params"]["workspace_dir"] = str(self.workspace_dir)
-
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.token}",

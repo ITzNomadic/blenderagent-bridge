@@ -135,3 +135,28 @@ def test_unknown_command_returns_structured_error(test_server):
     assert resp.error.code == "INVALID_ARGUMENT"
     assert "supported_commands" in resp.error.details
 
+
+def test_client_workspace_override_rejected(test_server):
+    server, port, token = test_server
+    url = f"http://127.0.0.1:{port}/api/v1/command"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    # Attacker tries to hijack workspace_dir
+    payload = {
+        "command": "save_project",
+        "params": {
+            "workspace_dir": "C:/Windows/System32",
+            "filename": "hacked.blend",
+        },
+    }
+    with httpx.Client(timeout=2.0) as client:
+        res = client.post(url, json=payload, headers=headers)
+        assert res.status_code == 403
+        data = res.json()
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "SECURITY_VIOLATION"
+        assert "workspace_dir" in data["error"]["message"]
+
+

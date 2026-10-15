@@ -19,18 +19,23 @@ from ..security import (
 
 
 def _get_workspace_dir(params: Dict[str, Any]) -> pathlib.Path:
-    """Resolve the authorized workspace directory."""
-    # 1. Check params
-    ws_param = params.get("workspace_dir")
-    if ws_param:
-        return pathlib.Path(ws_param).resolve()
+    """Resolve the authoritative workspace directory from server configuration."""
+    # 1. Authoritative server configuration
+    try:
+        from ..server import bridge_server
+        if bridge_server and bridge_server.workspace:
+            return bridge_server.workspace.resolve()
+    except Exception:
+        pass
 
-    # 2. Check scene property
-    scene = getattr(bpy.context, "scene", None)
-    if scene and hasattr(scene, "blenderagent_workspace_dir") and scene.blenderagent_workspace_dir:
-        return pathlib.Path(scene.blenderagent_workspace_dir).resolve()
+    # 2. Local scene property configured in Blender UI
+    scene = getattr(bpy, "context", None)
+    if scene and hasattr(scene, "scene") and hasattr(scene.scene, "blenderagent_workspace_dir"):
+        ws_val = scene.scene.blenderagent_workspace_dir.strip()
+        if ws_val:
+            return pathlib.Path(ws_val).resolve()
 
-    # 3. Check environment variable
+    # 3. Environment variable fallback
     env_ws = os.environ.get("BLENDERAGENT_WORKSPACE")
     if env_ws:
         return pathlib.Path(env_ws).resolve()

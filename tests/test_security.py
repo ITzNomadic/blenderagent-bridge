@@ -36,10 +36,48 @@ def test_validate_workspace_path_traversal_attack(temp_workspace):
 
 
 def test_validate_workspace_path_absolute_escape(temp_workspace):
-    # Attempting an absolute path outside workspace
-    outside_path = pathlib.Path("C:/Windows/System32/cmd.exe")
+    # Operating system portable absolute path escape check
+    import os
+    if os.name == "nt":
+        outside_path = pathlib.Path("C:/Windows/System32/cmd.exe")
+    else:
+        outside_path = pathlib.Path("/etc/passwd")
+
     with pytest.raises(SecurityViolationError):
         validate_workspace_path(temp_workspace, outside_path)
+
+
+def test_validate_workspace_path_shared_prefix_attack(temp_workspace):
+    # Attempting to escape to a sibling directory sharing the same string prefix
+    sibling_evil = temp_workspace.parent / f"{temp_workspace.name}_evil" / "exploit.blend"
+    with pytest.raises(SecurityViolationError):
+        validate_workspace_path(temp_workspace, sibling_evil)
+
+
+def test_validate_workspace_path_windows_ads_colon(temp_workspace):
+    # Attempting Alternate Data Streams (ADS)
+    with pytest.raises(SecurityViolationError):
+        validate_workspace_path(temp_workspace, "safe.blend:hidden_stream")
+
+
+def test_validate_workspace_path_reserved_devices(temp_workspace):
+    # Attempting to use Windows reserved device names
+    for dev in ["NUL", "CON", "AUX", "COM1", "LPT1", "nul.blend", "con.png"]:
+        with pytest.raises(SecurityViolationError):
+            validate_workspace_path(temp_workspace, dev)
+
+
+def test_validate_workspace_path_root_as_target(temp_workspace):
+    # Attempting to target the workspace root itself
+    with pytest.raises(SecurityViolationError):
+        validate_workspace_path(temp_workspace, ".")
+
+
+def test_validate_workspace_path_wildcards(temp_workspace):
+    # Attempting wildcard or pipe characters
+    for bad in ["test*.blend", "test?.blend", "test|pipe.blend", "test<bad.blend"]:
+        with pytest.raises(InvalidArgumentError):
+            validate_workspace_path(temp_workspace, bad)
 
 
 def test_validate_workspace_path_null_byte(temp_workspace):
