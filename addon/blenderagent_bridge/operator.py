@@ -21,19 +21,19 @@ class WM_OT_BlenderAgentStartBridge(Operator):
     bl_description = "Start the BlenderAgent Bridge local server on 127.0.0.1"
 
     def execute(self, context):
-        scene = context.scene
-        port = scene.blenderagent_port
-        token = scene.blenderagent_token.strip() or None
-        workspace = scene.blenderagent_workspace_dir.strip() or None
+        wm = context.window_manager
+        port = getattr(wm, "blenderagent_port", 9876)
+        token = getattr(wm, "blenderagent_token", "").strip() or None
+        workspace = getattr(wm, "blenderagent_workspace_dir", "").strip() or None
 
         success, msg = bridge_server.start(port=port, token=token, workspace_dir=workspace)
         if success:
-            scene.blenderagent_is_running = True
-            scene.blenderagent_token = bridge_server.token
+            wm.blenderagent_is_running = True
+            wm.blenderagent_token = bridge_server.token
             self.report({"INFO"}, msg)
             return {"FINISHED"}
         else:
-            scene.blenderagent_is_running = False
+            wm.blenderagent_is_running = False
             self.report({"ERROR"}, msg)
             return {"CANCELLED"}
 
@@ -47,7 +47,7 @@ class WM_OT_BlenderAgentStopBridge(Operator):
 
     def execute(self, context):
         success, msg = bridge_server.stop()
-        context.scene.blenderagent_is_running = False
+        context.window_manager.blenderagent_is_running = False
         self.report({"INFO"}, msg)
         return {"FINISHED"}
 
@@ -60,12 +60,12 @@ class WM_OT_BlenderAgentRegenerateToken(Operator):
     bl_description = "Generate a new cryptographic Bearer token"
 
     def execute(self, context):
+        wm = context.window_manager
         new_token = generate_session_token()
-        context.scene.blenderagent_token = new_token
+        wm.blenderagent_token = new_token
         if bridge_server.is_running:
-            # Restart server with new token
-            port = context.scene.blenderagent_port
-            workspace = context.scene.blenderagent_workspace_dir
+            port = getattr(wm, "blenderagent_port", 9876)
+            workspace = getattr(wm, "blenderagent_workspace_dir", None)
             bridge_server.stop()
             bridge_server.start(port=port, token=new_token, workspace_dir=workspace)
             self.report({"INFO"}, "Token regenerated and bridge restarted.")

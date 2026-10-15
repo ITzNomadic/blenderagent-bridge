@@ -50,14 +50,17 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
         box_config = layout.box()
         box_config.label(text="Configuration & Security", icon="LOCKED")
 
+        wm = context.window_manager
+        props_target = wm if hasattr(wm, "blenderagent_port") else scene
+
         col = box_config.column(align=True)
-        col.prop(scene, "blenderagent_port", text="Port")
+        col.prop(props_target, "blenderagent_port", text="Port")
         
         row_token = col.row(align=True)
-        row_token.prop(scene, "blenderagent_token", text="Token")
+        row_token.prop(props_target, "blenderagent_token", text="Token")
         row_token.operator("wm.blenderagent_regenerate_token", text="", icon="FILE_REFRESH")
 
-        col.prop(scene, "blenderagent_workspace_dir", text="Workspace")
+        col.prop(props_target, "blenderagent_workspace_dir", text="Workspace")
 
         # 4. Activity & Metrics
         layout.separator()

@@ -1,13 +1,15 @@
-"""Local HTTP server transport bound strictly to 127.0.0.1 with Bearer token authentication."""
+"""Local HTTP server transport bound strictly to 127.0.0.1 with hardened authentication and security."""
 
 from __future__ import annotations
 
 import json
 import logging
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import os
 import pathlib
+import secrets
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from .queue_manager import queue_manager
 from .security import (
@@ -21,44 +23,176 @@ logger = logging.getLogger("blenderagent_bridge.server")
 
 
 class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
-    """HTTP Request Handler servicing BlenderAgent Bridge API endpoints."""
+    """Hardened HTTP Request Handler servicing BlenderAgent Bridge API endpoints."""
 
     server_token: str = ""
+    server_port: int = 9876
     workspace_dir: pathlib.Path = pathlib.Path(".")
 
     def log_message(self, format: str, *args: Any) -> None:
         """Suppress default stderr HTTP request logging to avoid terminal clutter."""
         pass
 
+    def setup(self) -> None:
+        super().setup()
+        self._body_read = False
+
+    def _drain_request_body(self) -> None:
+        """Safely drain unread request body so socket close does not RST on Windows."""
+        if getattr(self, "_body_read", False):
+            return
+        self._body_read = True
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            if length > 0:
+                to_read = min(length, 1024 * 1024)
+                self.rfile.read(to_read)
+        except Exception:
+            pass
+
     def _send_json_response(self, data: Dict[str, Any], status_code: int = 200) -> None:
         try:
+            self._drain_request_body()
             body = json.dumps(data, indent=2).encode("utf-8")
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1")
-            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Access-Control-Allow-Origin", f"http://127.0.0.1:{self.server_port}")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
             self.end_headers()
             self.wfile.write(body)
+            self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
 
     def do_OPTIONS(self) -> None:
         """Handle CORS pre-flight requests strictly for localhost."""
         self.send_response(204)
-        self.send_header("Access-Control-Allow-Origin", "http://127.0.0.1")
+        self.send_header("Access-Control-Allow-Origin", f"http://127.0.0.1:{self.server_port}")
         self.send_header("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
         self.end_headers()
 
+    def _validate_client_and_headers(self) -> bool:
+        """Validate client IP, Host header, and Origin header."""
+        client_ip = self.client_address[0] if self.client_address else "127.0.0.1"
+
+        # 1. Enforce localhost origin
+        if client_ip not in ("127.0.0.1", "localhost", "::1"):
+            audit_logger.log("FORBIDDEN_IP", "BLOCKED", f"Rejected remote attempt from {client_ip}", client_ip)
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "FORBIDDEN",
+                    "message": "BlenderAgent Bridge only accepts connections from localhost (127.0.0.1).",
+                },
+                "message": "Access denied.",
+            }, status_code=403)
+            return False
+
+        # 2. Host header verification (DNS Rebinding defense)
+        host_header = self.headers.get("Host", "").split(":")[0].lower()
+        if host_header not in ("127.0.0.1", "localhost", "::1"):
+            audit_logger.log("FORBIDDEN_HOST", "BLOCKED", f"Rejected Host: '{host_header}'", client_ip)
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "FORBIDDEN_HOST",
+                    "message": f"Invalid Host '{host_header}'. Requests must target 127.0.0.1 or localhost.",
+                },
+                "message": "Access denied: Host validation failed.",
+            }, status_code=403)
+            return False
+
+        # 3. Origin header check (against CSRF from local browsers)
+        origin_header = self.headers.get("Origin")
+        if origin_header and origin_header != "null":
+            allowed = (
+                f"http://127.0.0.1:{self.server_port}",
+                f"http://localhost:{self.server_port}",
+                "http://127.0.0.1",
+                "http://localhost",
+            )
+            if not any(origin_header.startswith(a) for a in allowed):
+                audit_logger.log("CSRF_BLOCKED", "BLOCKED", f"Rejected Origin: '{origin_header}'", client_ip)
+                self._send_json_response({
+                    "status": "error",
+                    "error": {
+                        "code": "FORBIDDEN_ORIGIN",
+                        "message": f"Cross-origin access from '{origin_header}' is prohibited.",
+                    },
+                    "message": "Access denied: Origin untrusted.",
+                }, status_code=403)
+                return False
+
+        return True
+
+    def _verify_auth_token(self) -> bool:
+        """Verify Bearer token using constant-time comparison."""
+        auth_header = self.headers.get("Authorization", "").strip()
+        client_ip = self.client_address[0] if self.client_address else "127.0.0.1"
+
+        if not auth_header.startswith("Bearer "):
+            audit_logger.log("AUTH_FAILURE", "REJECTED", "Missing Bearer token", client_ip)
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Invalid or missing Bearer authorization token header.",
+                },
+                "message": "Unauthorized.",
+            }, status_code=401)
+            return False
+
+        token_candidate = auth_header[7:].strip()
+        if not token_candidate or not self.server_token or not secrets.compare_digest(token_candidate, self.server_token):
+            audit_logger.log("AUTH_FAILURE", "REJECTED", "Incorrect Bearer token", client_ip)
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "UNAUTHORIZED",
+                    "message": "Invalid authentication token.",
+                },
+                "message": "Unauthorized: Access token rejected.",
+            }, status_code=401)
+            return False
+
+        return True
+
     def do_GET(self) -> None:
-        """Health check and diagnostic endpoint."""
+        """Health check and task diagnostic endpoint."""
+        if not self._validate_client_and_headers():
+            return
+
         if self.path == "/api/v1/health":
             self._send_json_response({
                 "status": "healthy",
                 "service": "blenderagent-bridge",
-                "version": "0.1.0",
+                "version": "0.1.1",
                 "active_tasks": audit_logger.total_count,
+            })
+            return
+
+        # Task status query: /api/v1/tasks/<task_id>
+        if self.path.startswith("/api/v1/tasks/"):
+            if not self._verify_auth_token():
+                return
+            task_id = self.path[len("/api/v1/tasks/"):].strip()
+            task = queue_manager.get_task(task_id)
+            if not task:
+                self._send_json_response({
+                    "status": "error",
+                    "error": {"code": "TASK_NOT_FOUND", "message": f"Task '{task_id}' not found."},
+                    "message": "Task not found.",
+                }, status_code=404)
+                return
+
+            self._send_json_response({
+                "status": "success",
+                "data": task.to_info_dict(),
+                "message": f"Task status: {task.status.value}",
             })
             return
 
@@ -69,35 +203,23 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
         }, status_code=404)
 
     def do_POST(self) -> None:
-        """Process API commands dispatched to Blender's main thread."""
-        client_ip = self.client_address[0] if self.client_address else "127.0.0.1"
-
-        # 1. Enforce localhost origin
-        if client_ip not in ("127.0.0.1", "localhost", "::1"):
-            audit_logger.log("UNAUTHORIZED_IP", "BLOCKED", f"Rejected remote connection attempt from {client_ip}", client_ip)
-            self._send_json_response({
-                "status": "error",
-                "error": {
-                    "code": "FORBIDDEN",
-                    "message": "BlenderAgent Bridge only accepts connections from localhost (127.0.0.1).",
-                },
-                "message": "Access denied.",
-            }, status_code=403)
+        """Process API commands and task cancellations."""
+        if not self._validate_client_and_headers():
             return
 
-        # 2. Enforce Bearer Token Authentication
-        auth_header = self.headers.get("Authorization", "")
-        expected_header = f"Bearer {self.server_token}"
-        if not auth_header or auth_header.strip() != expected_header:
-            audit_logger.log("AUTH_FAILURE", "REJECTED", "Missing or invalid Bearer token", client_ip)
+        if not self._verify_auth_token():
+            return
+
+        # Task cancellation: POST /api/v1/tasks/<task_id>/cancel
+        if self.path.startswith("/api/v1/tasks/") and self.path.endswith("/cancel"):
+            task_id = self.path[len("/api/v1/tasks/"): -len("/cancel")].strip()
+            success, msg = queue_manager.cancel_task(task_id)
+            status_code = 200 if success else 400
             self._send_json_response({
-                "status": "error",
-                "error": {
-                    "code": "UNAUTHORIZED",
-                    "message": "Invalid or missing Bearer authorization token.",
-                },
-                "message": "Unauthorized: Session token required.",
-            }, status_code=401)
+                "status": "success" if success else "error",
+                "message": msg,
+                "data": {"task_id": task_id, "cancelled": success},
+            }, status_code=status_code)
             return
 
         if self.path != "/api/v1/command":
@@ -108,21 +230,36 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             }, status_code=404)
             return
 
-        # 3. Read and parse JSON payload
+        # Validate Content-Type
+        content_type = self.headers.get("Content-Type", "")
+        if not content_type.lower().startswith("application/json"):
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "INVALID_CONTENT_TYPE",
+                    "message": f"Content-Type must be 'application/json', got '{content_type}'.",
+                },
+                "message": "Unsupported Media Type.",
+            }, status_code=415)
+            return
+
+        # Read and parse JSON payload
+        client_ip = self.client_address[0] if self.client_address else "127.0.0.1"
         try:
             content_length = int(self.headers.get("Content-Length", 0))
-            if content_length <= 0 or content_length > 10 * 1024 * 1024:  # 10MB limit
-                raise ValueError("Invalid Content-Length or payload exceeds 10MB limit.")
+            if content_length <= 0 or content_length > 5 * 1024 * 1024:  # 5MB limit
+                raise ValueError("Payload size must be between 1 byte and 5MB.")
 
+            self._body_read = True
             raw_body = self.rfile.read(content_length)
             payload = json.loads(raw_body.decode("utf-8"))
         except Exception as parse_err:
-            audit_logger.log("BAD_REQUEST", "ERROR", f"Invalid JSON payload: {parse_err}", client_ip)
+            audit_logger.log("BAD_REQUEST", "ERROR", f"Malformed payload: {parse_err}", client_ip)
             self._send_json_response({
                 "status": "error",
                 "error": {
                     "code": "INVALID_JSON",
-                    "message": f"Failed to parse request JSON: {parse_err}",
+                    "message": f"Failed to parse JSON body: {parse_err}",
                 },
                 "message": "Bad Request: Malformed JSON.",
             }, status_code=400)
@@ -134,7 +271,7 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
                 "status": "error",
                 "error": {
                     "code": "INVALID_ARGUMENT",
-                    "message": "Request must contain a valid string 'command' field.",
+                    "message": "Field 'command' must be a non-empty string.",
                 },
                 "message": "Bad Request: Missing command.",
             }, status_code=400)
@@ -163,21 +300,22 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             }, status_code=403)
             return
 
-        # Inject server-authorized workspace directory
+        # Inject authoritative server workspace directory
         params["workspace_dir"] = str(self.workspace_dir)
 
         request_id = payload.get("request_id")
         timeout = float(payload.get("timeout", 30.0))
+        idempotency_key = payload.get("idempotency_key") or self.headers.get("Idempotency-Key")
 
-        # 4. Dispatch to thread-safe execution queue
+        # Dispatch to thread-safe execution queue
         response_dict = queue_manager.submit_task(
             command_name=command_name,
             params=params,
             timeout=timeout,
             request_id=request_id,
+            idempotency_key=idempotency_key,
         )
 
-        # 5. Return standardized response
         status_code = 200
         if response_dict.get("status") == "error":
             err_code = response_dict.get("error", {}).get("code", "")
@@ -189,8 +327,10 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
                 status_code = 409
             elif err_code == "EXECUTION_TIMEOUT":
                 status_code = 504
-            elif err_code == "BRIDGE_UNAVAILABLE":
+            elif err_code in ("BRIDGE_UNAVAILABLE", "QUEUE_FULL"):
                 status_code = 503
+            elif err_code == "INVALID_ARGUMENT":
+                status_code = 400
 
         self._send_json_response(response_dict, status_code=status_code)
 
@@ -241,6 +381,7 @@ class BlenderAgentServer:
             self._workspace.mkdir(parents=True, exist_ok=True)
 
             BridgeHTTPRequestHandler.server_token = self._token
+            BridgeHTTPRequestHandler.server_port = self._port
             BridgeHTTPRequestHandler.workspace_dir = self._workspace
 
             try:
@@ -262,7 +403,7 @@ class BlenderAgentServer:
             self._thread.start()
             self._is_running = True
 
-            # Write session file in workspace
+            # Write protected session file in workspace
             write_session_file(self._token, self._port, self._workspace)
             audit_logger.log("SERVER_START", "ACTIVE", f"Listening on 127.0.0.1:{self._port}")
 

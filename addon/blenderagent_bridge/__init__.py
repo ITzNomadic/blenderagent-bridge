@@ -33,30 +33,48 @@ ALL_CLASSES = OPERATOR_CLASSES + PANEL_CLASSES
 def _init_properties():
     if not bpy:
         return
-    bpy.types.Scene.blenderagent_is_running = BoolProperty(
+    # 1. Register runtime-only properties on WindowManager (NEVER saved to .blend files)
+    bpy.types.WindowManager.blenderagent_is_running = BoolProperty(
         name="Bridge Active",
         description="Whether the local bridge server is actively running",
         default=False,
     )
-    bpy.types.Scene.blenderagent_port = IntProperty(
+    bpy.types.WindowManager.blenderagent_port = IntProperty(
         name="Port",
         description="Localhost port for HTTP transport",
         default=int(os.environ.get("BLENDERAGENT_PORT", 9876)),
         min=1024,
         max=65535,
     )
-    bpy.types.Scene.blenderagent_token = StringProperty(
+    bpy.types.WindowManager.blenderagent_token = StringProperty(
         name="Session Token",
-        description="Cryptographic Bearer token for local API authentication",
+        description="Transient cryptographic Bearer token (never saved in .blend)",
         default="",
-        subtype="NONE",
+        subtype="PASSWORD",
     )
     default_ws = os.environ.get("BLENDERAGENT_WORKSPACE", "")
     if not default_ws:
         default_ws = str(pathlib.Path.cwd() / "workspace")
-    bpy.types.Scene.blenderagent_workspace_dir = StringProperty(
+    bpy.types.WindowManager.blenderagent_workspace_dir = StringProperty(
         name="Workspace Directory",
         description="Authorized directory for saving scenes and rendering previews",
+        default=default_ws,
+        subtype="DIR_PATH",
+    )
+
+    # 2. Register non-sensitive aliases on Scene for backward compatibility
+    bpy.types.Scene.blenderagent_is_running = BoolProperty(
+        name="Bridge Active",
+        default=False,
+    )
+    bpy.types.Scene.blenderagent_port = IntProperty(
+        name="Port",
+        default=int(os.environ.get("BLENDERAGENT_PORT", 9876)),
+        min=1024,
+        max=65535,
+    )
+    bpy.types.Scene.blenderagent_workspace_dir = StringProperty(
+        name="Workspace Directory",
         default=default_ws,
         subtype="DIR_PATH",
     )
@@ -65,13 +83,22 @@ def _init_properties():
 def _clear_properties():
     if not bpy:
         return
-    props = [
+    wm_props = [
         "blenderagent_is_running",
         "blenderagent_port",
         "blenderagent_token",
         "blenderagent_workspace_dir",
     ]
-    for prop in props:
+    for prop in wm_props:
+        if hasattr(bpy.types.WindowManager, prop):
+            delattr(bpy.types.WindowManager, prop)
+
+    scene_props = [
+        "blenderagent_is_running",
+        "blenderagent_port",
+        "blenderagent_workspace_dir",
+    ]
+    for prop in scene_props:
         if hasattr(bpy.types.Scene, prop):
             delattr(bpy.types.Scene, prop)
 

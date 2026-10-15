@@ -46,12 +46,19 @@ def main():
     print(f"[BlenderAgent Runner] Registering BlenderAgent Bridge addon...")
     blenderagent_bridge.register()
 
-    # Configure scene properties
-    scene = bpy.context.scene
-    scene.blenderagent_port = args.port
-    if args.token:
-        scene.blenderagent_token = args.token
-    scene.blenderagent_workspace_dir = args.workspace
+    # Configure runtime properties on WindowManager
+    wm = getattr(bpy.context, "window_manager", None)
+    if wm and hasattr(wm, "blenderagent_port"):
+        wm.blenderagent_port = args.port
+        if args.token:
+            wm.blenderagent_token = args.token
+        wm.blenderagent_workspace_dir = args.workspace
+
+    # Also configure scene if present for fallback
+    scene = getattr(bpy.context, "scene", None)
+    if scene and hasattr(scene, "blenderagent_port"):
+        scene.blenderagent_port = args.port
+        scene.blenderagent_workspace_dir = args.workspace
 
     print(f"[BlenderAgent Runner] Starting bridge on port {args.port} (Workspace: {args.workspace})...")
     res = bpy.ops.wm.blenderagent_start_bridge()

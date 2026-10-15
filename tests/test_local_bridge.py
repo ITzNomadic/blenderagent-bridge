@@ -7,7 +7,7 @@ import time
 import httpx
 import pytest
 
-from addon.blenderagent_bridge.queue_manager import queue_manager
+from addon.blenderagent_bridge.queue_manager import queue_manager, TaskStatus
 from addon.blenderagent_bridge.server import BlenderAgentServer
 
 
@@ -158,5 +158,83 @@ def test_client_workspace_override_rejected(test_server):
         assert data["status"] == "error"
         assert data["error"]["code"] == "SECURITY_VIOLATION"
         assert "workspace_dir" in data["error"]["message"]
+
+
+def test_invalid_content_type_rejected(test_server):
+    server, port, token = test_server
+    url = f"http://127.0.0.1:{port}/api/v1/command"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "text/plain",
+    }
+    with httpx.Client(timeout=2.0) as client:
+        res = client.post(url, content=b'{"command": "get_scene_info"}', headers=headers)
+        assert res.status_code == 415
+        data = res.json()
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "INVALID_CONTENT_TYPE"
+
+
+def test_untrusted_host_header_rejected(test_server):
+    server, port, token = test_server
+    url = f"http://127.0.0.1:{port}/api/v1/status"
+    headers = {"Host": "attacker.domain.com"}
+    with httpx.Client(timeout=2.0) as client:
+        res = client.get(url, headers=headers)
+        assert res.status_code == 403
+        data = res.json()
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "FORBIDDEN_HOST"
+
+
+def test_untrusted_origin_header_rejected(test_server):
+    server, port, token = test_server
+    url = f"http://127.0.0.1:{port}/api/v1/status"
+    headers = {"Origin": "http://evil-website.com"}
+    with httpx.Client(timeout=2.0) as client:
+        res = client.get(url, headers=headers)
+        assert res.status_code == 403
+        data = res.json()
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "FORBIDDEN_ORIGIN"
+
+
+def test_task_status_endpoint(test_server):
+    from addon.blenderagent_bridge.queue_manager import queue_manager, CommandTask
+    server, port, token = test_server
+    
+    # Enqueue a dummy task directly to test status endpoint
+    task = CommandTask("get_scene_info", {})
+    queue_manager._tasks_by_id[task.task_id] = task
+
+    url = f"http://127.0.0.1:{port}/api/v1/tasks/{task.task_id}"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=2.0) as client:
+        res = client.get(url, headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["data"]["task_id"] == task.task_id
+        assert data["data"]["command"] == "get_scene_info"
+
+
+def test_task_cancel_endpoint(test_server):
+    from addon.blenderagent_bridge.queue_manager import queue_manager, CommandTask
+    server, port, token = test_server
+
+    task = CommandTask("create_primitive", {"type": "cube"})
+    task.status = TaskStatus.RUNNING
+    queue_manager._tasks_by_id[task.task_id] = task
+
+    url = f"http://127.0.0.1:{port}/api/v1/tasks/{task.task_id}/cancel"
+    headers = {"Authorization": f"Bearer {token}"}
+    with httpx.Client(timeout=2.0) as client:
+        res = client.post(url, headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert data["status"] == "success"
+        assert data["data"]["cancelled"] is True
+        assert task.cancel_event.is_set()
+
 
 
