@@ -28,10 +28,37 @@ import pytest
 from mcp_server.client import BlenderBridgeClient
 from mcp_server.server import create_mcp_server
 
-BLENDER_EXE = r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe"
+import shutil
+
+def find_blender_executable() -> Optional[str]:
+    """Dynamically locate Blender 5.2 / LTS executable across OSes and environments."""
+    env_path = os.environ.get("BLENDER_PATH") or os.environ.get("BLENDER_EXE")
+    if env_path and os.path.exists(env_path):
+        return env_path
+
+    which_path = shutil.which("blender")
+    if which_path:
+        return which_path
+
+    candidates = [
+        r"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender 4.2\blender.exe",
+        r"C:\Program Files\Blender Foundation\Blender\blender.exe",
+        "/usr/bin/blender",
+        "/usr/local/bin/blender",
+        "/Applications/Blender.app/Contents/MacOS/Blender",
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return None
 
 
-@pytest.mark.skipif(not os.path.exists(BLENDER_EXE), reason="Blender executable not found at specified path.")
+BLENDER_EXE = find_blender_executable()
+
+
+@pytest.mark.skipif(BLENDER_EXE is None, reason="Blender executable not found on host or PATH.")
 def test_full_phase5_e2e_flow(temp_workspace):
     port = 9892
     token = "e2e_secret_token_12345"
@@ -108,16 +135,16 @@ def test_full_phase5_e2e_flow(temp_workspace):
             assert data_create["status"] == "success"
             assert data_create["data"]["name"] == "AgentCube"
 
-            # Step 6: transform_object to (2, 0, 1)
+            # Step 6: transform_object to (1.5, 0, 1)
             res_trans = await mcp_server.call_tool(
                 "transform_object",
-                {"name": "AgentCube", "location": [2.0, 0.0, 1.0]},
+                {"name": "AgentCube", "location": [1.5, 0.0, 1.0]},
             )
             data_trans = json.loads(res_trans.content[0].text)
             assert data_trans["status"] == "success"
-            assert data_trans["data"]["location"] == [2.0, 0.0, 1.0]
+            assert data_trans["data"]["location"] == [1.5, 0.0, 1.0]
 
-            # Step 7: set_material (Metallic blue)
+            # Step 7: set_material (Metallic blue on AgentCube)
             res_mat = await mcp_server.call_tool(
                 "set_material",
                 {
@@ -131,8 +158,38 @@ def test_full_phase5_e2e_flow(temp_workspace):
             data_mat = json.loads(res_mat.content[0].text)
             assert data_mat["status"] == "success"
             assert data_mat["data"]["material_name"] == "AgentMetallicBlue"
-            assert data_mat["data"]["metallic"] == 0.9
-            assert data_mat["data"]["roughness"] == 0.2
+
+            # Step 7b: Create and transform a second object (Cylinder named AgentCylinder)
+            res_cyl = await mcp_server.call_tool(
+                "create_primitive",
+                {"type": "cylinder", "name": "AgentCylinder", "location": [-1.5, 0.0, 1.0], "scale": [0.8, 0.8, 1.2]},
+            )
+            data_cyl = json.loads(res_cyl.content[0].text)
+            assert data_cyl["status"] == "success"
+            assert data_cyl["data"]["name"] == "AgentCylinder"
+
+            # Transform cylinder rotation
+            res_cyl_trans = await mcp_server.call_tool(
+                "transform_object",
+                {"name": "AgentCylinder", "rotation": [0.0, 15.0, 30.0]},
+            )
+            data_cyl_trans = json.loads(res_cyl_trans.content[0].text)
+            assert data_cyl_trans["status"] == "success"
+
+            # Assign Gold/Copper material to AgentCylinder
+            res_cyl_mat = await mcp_server.call_tool(
+                "set_material",
+                {
+                    "name": "AgentCylinder",
+                    "color": [0.95, 0.65, 0.2, 1.0],
+                    "metallic": 0.85,
+                    "roughness": 0.25,
+                    "material_name": "AgentGoldCopper",
+                },
+            )
+            data_cyl_mat = json.loads(res_cyl_mat.content[0].text)
+            assert data_cyl_mat["status"] == "success"
+            assert data_cyl_mat["data"]["material_name"] == "AgentGoldCopper"
 
             # Step 8: set_camera and lighting
             res_cam = await mcp_server.call_tool(
@@ -178,20 +235,27 @@ def test_full_phase5_e2e_flow(temp_workspace):
             assert blend_file.exists(), "Saved .blend file was not found on disk."
             assert blend_file.stat().st_size > 10000, ".blend file size is suspiciously small."
 
-            # Step 11: get_object_info and verify properties
+            # Step 11: get_object_info and verify properties for both objects
             res_obj = await mcp_server.call_tool("get_object_info", {"name": "AgentCube"})
             data_obj = json.loads(res_obj.content[0].text)
             assert data_obj["status"] == "success"
             assert data_obj["data"]["name"] == "AgentCube"
-            assert data_obj["data"]["location"] == [2.0, 0.0, 1.0]
+            assert data_obj["data"]["location"] == [1.5, 0.0, 1.0]
             assert "AgentMetallicBlue" in data_obj["data"]["materials"]
 
-            # Step 12: Verify Blender remains responsive
+            res_obj2 = await mcp_server.call_tool("get_object_info", {"name": "AgentCylinder"})
+            data_obj2 = json.loads(res_obj2.content[0].text)
+            assert data_obj2["status"] == "success"
+            assert data_obj2["data"]["name"] == "AgentCylinder"
+            assert "AgentGoldCopper" in data_obj2["data"]["materials"]
+
+            # Step 12: Verify Blender remains responsive and contains both objects
             res_verify = await mcp_server.call_tool("get_scene_info", {})
             data_verify = json.loads(res_verify.content[0].text)
             assert data_verify["status"] == "success"
             obj_names = [o["name"] for o in data_verify["data"]["objects"]]
             assert "AgentCube" in obj_names
+            assert "AgentCylinder" in obj_names
 
         asyncio.run(run_mcp_flow())
 

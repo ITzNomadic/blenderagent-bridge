@@ -78,7 +78,7 @@ def run_demonstration(port: int = 9876, token: str = ""):
     print(f"    - Verified Location: {res.data['location']}")
 
     # Step 7: Assign Metallic Blue material
-    print("\n[Step 7] Assigning metallic blue Principled BSDF material...")
+    print("\n[Step 7] Assigning metallic blue Principled BSDF material to 'AgentCube'...")
     res = client.send_command(
         "set_material",
         {
@@ -95,6 +95,39 @@ def run_demonstration(port: int = 9876, token: str = ""):
     print(f"    - Material Name:     {res.data['material_name']}")
     print(f"    - Metallic Factor:   {res.data['metallic']}")
     print(f"    - Roughness Factor:  {res.data['roughness']}")
+
+    # Step 7b: Create and shade second object: AgentCylinder
+    print("\n[Step 7b] Creating second object: Cylinder named 'AgentCylinder'...")
+    res = client.send_command(
+        "create_primitive",
+        {"type": "cylinder", "name": "AgentCylinder", "location": [-1.5, 0.0, 1.0], "scale": [0.8, 0.8, 1.2]},
+    )
+    if res.status != "success":
+        print(f"[!] Failed: {res.message}")
+        sys.exit(1)
+    print(f"    - Object Created:    {res.data['name']} (Collision Renamed: {res.data.get('renamed', False)})")
+
+    print("    - Rotating 'AgentCylinder' by [0, 15, 30] degrees...")
+    client.send_command(
+        "transform_object",
+        {"name": "AgentCylinder", "rotation": [0.0, 15.0, 30.0]},
+    )
+
+    print("    - Assigning Warm Copper/Gold material to 'AgentCylinder'...")
+    res = client.send_command(
+        "set_material",
+        {
+            "name": "AgentCylinder",
+            "color": [0.95, 0.65, 0.2, 1.0],
+            "metallic": 0.85,
+            "roughness": 0.25,
+            "material_name": "AgentGoldCopper",
+        },
+    )
+    if res.status != "success":
+        print(f"[!] Failed: {res.message}")
+        sys.exit(1)
+    print(f"    - Material Name:     {res.data['material_name']}")
 
     # Step 8: Configure Camera and Lighting
     print("\n[Step 8] Positioning observation camera and configuring lighting...")

@@ -66,7 +66,8 @@ def main():
         print(f"[BlenderAgent Runner] Failed to start bridge operator: {res}")
         sys.exit(1)
 
-    print(f"[BlenderAgent Runner] Bridge successfully started. Token: {scene.blenderagent_token}")
+    actual_token = getattr(wm, "blenderagent_token", bridge_server.token)
+    print(f"[BlenderAgent Runner] Bridge successfully started. Token: {actual_token}")
     print(f"[BlenderAgent Runner] Ready for agent connections.")
 
     # In background/headless mode (-b), keep the main thread pumping
