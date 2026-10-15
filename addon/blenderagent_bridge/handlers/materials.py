@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict
-import bpy
+try:
+    import bpy
+except ImportError:
+    bpy = None
 
 from ..security import InvalidArgumentError, ObjectNotFoundError
 from .objects import _find_object

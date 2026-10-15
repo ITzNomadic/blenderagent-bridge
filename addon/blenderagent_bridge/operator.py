@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import bpy
-from bpy.types import Operator
+try:
+    import bpy
+    from bpy.types import Operator
+except ImportError:
+    bpy = None
+    Operator = object
 
 from .security import audit_logger, generate_session_token
 from .server import bridge_server

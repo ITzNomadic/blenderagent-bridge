@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from typing import Any, Dict
-import bpy
+try:
+    import bpy
+except ImportError:
+    bpy = None
 
 
 def handle_get_scene_info(params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:

@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import math
 from typing import Any, Dict
-import bpy
+try:
+    import bpy
+except ImportError:
+    bpy = None
 
 from ..security import InvalidArgumentError, ObjectNotFoundError
 
 
 def _find_object(name: str) -> bpy.types.Object:
+    if not bpy or not hasattr(bpy, "data"):
+        raise ObjectNotFoundError(f"Blender environment not initialized: cannot find object '{name}'.")
     if not name or not isinstance(name, str):
         raise InvalidArgumentError("Object 'name' must be a non-empty string.")
     obj = bpy.data.objects.get(name)

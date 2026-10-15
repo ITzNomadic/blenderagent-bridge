@@ -15,9 +15,12 @@ bl_info = {
 
 import os
 import pathlib
-import bpy
-from bpy.props import BoolProperty, IntProperty, StringProperty
-from bpy.utils import register_class, unregister_class
+try:
+    import bpy
+    from bpy.props import BoolProperty, IntProperty, StringProperty
+    from bpy.utils import register_class, unregister_class
+except ImportError:
+    bpy = None
 
 from .operator import OPERATOR_CLASSES
 from .panel import PANEL_CLASSES
@@ -28,6 +31,8 @@ ALL_CLASSES = OPERATOR_CLASSES + PANEL_CLASSES
 
 
 def _init_properties():
+    if not bpy:
+        return
     bpy.types.Scene.blenderagent_is_running = BoolProperty(
         name="Bridge Active",
         description="Whether the local bridge server is actively running",
@@ -58,6 +63,8 @@ def _init_properties():
 
 
 def _clear_properties():
+    if not bpy:
+        return
     props = [
         "blenderagent_is_running",
         "blenderagent_port",
@@ -71,6 +78,8 @@ def _clear_properties():
 
 def register():
     """Register all classes, operators, panels, and properties."""
+    if not bpy:
+        return
     for cls in ALL_CLASSES:
         try:
             register_class(cls)

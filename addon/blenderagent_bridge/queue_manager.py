@@ -6,7 +6,10 @@ import queue
 import threading
 import time
 from typing import Any, Dict, Optional
-import bpy
+try:
+    import bpy
+except ImportError:
+    bpy = None
 
 from .handlers import dispatch_command
 from .security import (
@@ -62,7 +65,8 @@ class ExecutionQueueManager:
 
             try:
                 # Dispatch handler safely in the main thread context
-                result_data = dispatch_command(cmd_name, task.params, bpy.context)
+                ctx = getattr(bpy, "context", None) if bpy else None
+                result_data = dispatch_command(cmd_name, task.params, ctx)
                 task.result_holder["status"] = "success"
                 task.result_holder["data"] = result_data
                 task.result_holder["error"] = None
@@ -101,19 +105,21 @@ class ExecutionQueueManager:
         with self._lock:
             if not self._is_timer_running:
                 self._is_timer_running = True
-                if not bpy.app.timers.is_registered(self.process_queue_tick):
-                    bpy.app.timers.register(self.process_queue_tick, first_interval=0.01, persistent=True)
+                if bpy and hasattr(bpy, "app") and hasattr(bpy.app, "timers"):
+                    if not bpy.app.timers.is_registered(self.process_queue_tick):
+                        bpy.app.timers.register(self.process_queue_tick, first_interval=0.01, persistent=True)
 
     def stop(self) -> None:
         """Unregister the timer and drain any uncompleted tasks."""
         with self._lock:
             self._is_timer_running = False
 
-        if bpy.app.timers.is_registered(self.process_queue_tick):
-            try:
-                bpy.app.timers.unregister(self.process_queue_tick)
-            except Exception:
-                pass
+        if bpy and hasattr(bpy, "app") and hasattr(bpy.app, "timers"):
+            if bpy.app.timers.is_registered(self.process_queue_tick):
+                try:
+                    bpy.app.timers.unregister(self.process_queue_tick)
+                except Exception:
+                    pass
 
         # Drain and notify any pending tasks
         while not self._queue.empty():

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import math
 from typing import Any, Dict
-import bpy
+try:
+    import bpy
+except ImportError:
+    bpy = None
 
 from ..security import InvalidArgumentError
 

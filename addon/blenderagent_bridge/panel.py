@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-import bpy
-from bpy.types import Panel
+try:
+    import bpy
+    from bpy.types import Panel
+except ImportError:
+    bpy = None
+    Panel = object
 
 from .security import audit_logger
 from .server import bridge_server
