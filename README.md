@@ -5,7 +5,14 @@
 [![Blender: 4.2+ / 4.5 LTS / 5.2 LTS](https://img.shields.io/badge/Blender-4.2%2B%20%7C%204.5%20LTS%20%7C%205.2%20LTS-orange.svg)](https://www.blender.org/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Official%20SDK-purple.svg)](https://modelcontextprotocol.io/)
 
-**BlenderAgent Bridge** (`v0.1.1`) is an open-source framework enabling autonomous AI agents (such as Antigravity, Claude Desktop, Cursor, or autonomous pipelines) to inspect, model, shade, illuminate, render, and control Blender through structured, deterministic, and verifiable **Model Context Protocol (MCP)** tools.
+**BlenderAgent Bridge** (`v0.2.0`) is an open-source framework enabling autonomous AI agents (such as Google Antigravity, OpenAI Codex, Claude Desktop, Cursor, or autonomous pipelines) to inspect, model, shade, illuminate, render, and control Blender through structured, deterministic, and verifiable **Model Context Protocol (MCP)** tools.
+
+### New in v0.2.0:
+- **One-Click Windows Installer (`BlenderAgentBridge-Setup.exe`)**: Zero-command, standalone installer with modern wizard GUI.
+- **Standalone MCP Launcher (`blenderagent-mcp.exe`)**: Built-in runtime requiring NO global Python installation.
+- **Automatic Multi-Client Integration**: Automatic discovery and registration for Google Antigravity and OpenAI Codex with backup preservation.
+- **DPAPI Credential Security**: Ephemeral Bearer tokens encrypted using Windows DPAPI and private filesystem ACLs.
+- **Safe Non-Admin Workspace**: Authoritative user workspace at `%LOCALAPPDATA%\BlenderAgentBridge\workspace`.
 
 Unlike conversational chatbots or insecure remote execution bridges (`eval`/`exec`), BlenderAgent Bridge enforces:
 - **Thread Safety**: All Blender scene mutations execute strictly on Blender's main thread via `bpy.app.timers`.

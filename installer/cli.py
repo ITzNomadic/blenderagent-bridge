@@ -1,0 +1,125 @@
+"""Command-line interface for headless, automated, and diagnostic installer operations."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import asdict
+import json
+import pathlib
+import sys
+
+# In Windows GUI mode, attach to parent terminal console if invoked from CLI
+if sys.platform == "win32":
+    import ctypes
+    try:
+        # ATTACH_PARENT_PROCESS = -1
+        if ctypes.windll.kernel32.AttachConsole(-1):
+            sys.stdout = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+            sys.stderr = open("CONOUT$", "w", encoding="utf-8", buffering=1)
+    except Exception:
+        pass
+
+try:
+    from .constants import DEFAULT_PORT, DEFAULT_WORKSPACE_DIR, VERSION
+    from .detector import detect_system_state
+    from .orchestrator import InstallationOrchestrator, InstallOptions
+except ImportError:
+    from installer.constants import DEFAULT_PORT, DEFAULT_WORKSPACE_DIR, VERSION
+    from installer.detector import detect_system_state
+    from installer.orchestrator import InstallationOrchestrator, InstallOptions
+
+
+def main():
+    parser = argparse.ArgumentParser(description=f"BlenderAgent Bridge v{VERSION} CLI & Installer Engine")
+    parser.add_argument("--gui", action="store_true", help="Launch interactive graphical user interface (default if no flags)")
+    parser.add_argument("--install", action="store_true", help="Perform unattended silent installation")
+    parser.add_argument("--detect", action="store_true", help="Inspect and print system state in JSON format")
+    parser.add_argument("--repair", action="store_true", help="Repair existing installation and MCP configurations")
+    parser.add_argument("--uninstall", action="store_true", help="Remove registrations and extension safely")
+    parser.add_argument("--workspace", type=str, default=str(DEFAULT_WORKSPACE_DIR), help="Custom workspace path")
+    parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Local bridge port (default 9876)")
+    parser.add_argument("--no-antigravity", action="store_true", help="Skip Google Antigravity registration")
+    parser.add_argument("--no-codex", action="store_true", help="Skip OpenAI Codex registration")
+
+    args = parser.parse_args()
+
+    # Default to GUI if no explicit operation flag is passed and display is available
+    if len(sys.argv) == 1 or args.gui:
+        try:
+            from .gui import launch_gui
+            launch_gui()
+            return 0
+        except Exception as err:
+            print(f"[!] Warning: Graphical interface unavailable ({err}). Falling back to CLI mode.")
+
+    if args.detect:
+        state = detect_system_state()
+        data = {
+            "blenders": [
+                {
+                    "path": str(b.executable_path),
+                    "version": b.version_str,
+                    "supported": b.is_supported,
+                    "running": b.is_running,
+                    "repos": list(b.extension_repos.keys()),
+                }
+                for b in state.blender_installations
+            ],
+            "antigravity": {
+                "installed": state.antigravity.installed,
+                "configured": state.antigravity.is_configured,
+                "config_paths": [str(p) for p in state.antigravity.config_paths],
+            },
+            "codex": {
+                "installed": state.codex.installed,
+                "configured": state.codex.is_configured,
+                "config_path": str(state.codex.config_path) if state.codex.config_path else None,
+            },
+            "bridge_running": state.is_bridge_running,
+        }
+        print(json.dumps(data, indent=2))
+        return 0
+
+    if args.repair:
+        orch = InstallationOrchestrator()
+        success, msg = orch.repair()
+        print(f"[*] Repair result: {msg}")
+        return 0 if success else 1
+
+    if args.uninstall:
+        orch = InstallationOrchestrator()
+        success, logs = orch.uninstall(keep_workspace=True)
+        print("[*] Uninstallation completed:")
+        for line in logs:
+            print(f"    - {line}")
+        return 0 if success else 1
+
+    if args.install:
+        state = detect_system_state()
+        options = InstallOptions(
+            blender=state.recommended_blender,
+            install_antigravity=not args.no_antigravity,
+            install_codex=not args.no_codex,
+            workspace_dir=pathlib.Path(args.workspace),
+            port=args.port,
+        )
+        orch = InstallationOrchestrator(options)
+
+        def print_progress(name: str, status: str, msg: str):
+            print(f"[{status.upper():<7}] {name}: {msg}")
+
+        success, steps = orch.run_installation(progress_callback=print_progress)
+        print("=" * 60)
+        if success:
+            print("[+] BlenderAgent Bridge v0.2.0 installed successfully!")
+            return 0
+        else:
+            print("[!] Installation encountered failures.")
+            return 1
+
+    parser.print_help()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

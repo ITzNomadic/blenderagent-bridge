@@ -5,7 +5,7 @@ from __future__ import annotations
 bl_info = {
     "name": "BlenderAgent Bridge",
     "author": "BlenderAgent Team",
-    "version": (0, 1, 1),
+    "version": (0, 2, 0),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > BlenderAgent",
     "description": "Structured, verifiable, and secure MCP control bridge for Blender",
@@ -54,7 +54,11 @@ def _init_properties():
     )
     default_ws = os.environ.get("BLENDERAGENT_WORKSPACE", "")
     if not default_ws:
-        default_ws = str(pathlib.Path.cwd() / "workspace")
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            default_ws = str(pathlib.Path(local_appdata) / "BlenderAgentBridge" / "workspace")
+        else:
+            default_ws = str(pathlib.Path.home() / ".blenderagent" / "workspace")
     bpy.types.WindowManager.blenderagent_workspace_dir = StringProperty(
         name="Workspace Directory",
         description="Authorized directory for saving scenes and rendering previews",
