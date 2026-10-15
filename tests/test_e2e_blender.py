@@ -249,6 +249,32 @@ def test_full_phase5_e2e_flow(temp_workspace):
             assert data_obj2["data"]["name"] == "AgentCylinder"
             assert "AgentGoldCopper" in data_obj2["data"]["materials"]
 
+            # Step 11b: Verify get_mesh_info for topological metrics
+            res_mesh = await mcp_server.call_tool("get_mesh_info", {"name": "AgentCube"})
+            data_mesh = json.loads(res_mesh.content[0].text)
+            assert data_mesh["status"] == "success"
+            assert data_mesh["data"]["vertex_count"] == 8
+            assert data_mesh["data"]["polygon_count"] == 6
+            assert data_mesh["data"]["is_manifold"] is True
+
+            res_mesh2 = await mcp_server.call_tool("get_mesh_info", {"name": "AgentCylinder"})
+            data_mesh2 = json.loads(res_mesh2.content[0].text)
+            assert data_mesh2["status"] == "success"
+            assert data_mesh2["data"]["vertex_count"] > 20
+            assert data_mesh2["data"]["is_manifold"] is True
+
+            # Step 11c: Verify rapid capture_viewport
+            viewport_filename = "renders/agent_viewport_capture.png"
+            res_vp = await mcp_server.call_tool(
+                "capture_viewport",
+                {"width": 320, "height": 240, "output_filename": viewport_filename},
+            )
+            data_vp = json.loads(res_vp.content[0].text)
+            assert data_vp["status"] == "success"
+            vp_file = temp_workspace / viewport_filename
+            assert vp_file.exists(), "Viewport capture file was not written."
+            assert vp_file.stat().st_size > 500, "Viewport capture file is empty."
+
             # Step 12: Verify Blender remains responsive and contains both objects
             res_verify = await mcp_server.call_tool("get_scene_info", {})
             data_verify = json.loads(res_verify.content[0].text)

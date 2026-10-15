@@ -23,8 +23,10 @@ except ImportError:
 
 from .client import BlenderBridgeClient
 from .models import (
+    CaptureViewportInput,
     CreatePrimitiveInput,
     ErrorDetail,
+    GetMeshInfoInput,
     RenderPreviewInput,
     ResponseEnvelope,
     SaveProjectInput,
@@ -280,6 +282,50 @@ def create_mcp_server(
 
         cl = get_client()
         resp = cl.send_command("save_project", validated.model_dump())
+        return resp.model_dump()
+
+    @mcp.tool(
+        name="get_mesh_info",
+        description=(
+            "Inspect detailed mesh topology metrics: vertex count, edge count, polygon count, "
+            "UV layers, vertex groups, assigned materials, and manifold geometric check."
+        ),
+    )
+    def get_mesh_info(name: str) -> Dict[str, Any]:
+        """Inspect mesh topology and geometric integrity."""
+        try:
+            validated = GetMeshInfoInput(name=name)
+        except ValidationError as err:
+            return _validation_error_response(err)
+
+        cl = get_client()
+        resp = cl.send_command("get_mesh_info", validated.model_dump())
+        return resp.model_dump()
+
+    @mcp.tool(
+        name="capture_viewport",
+        description=(
+            "Quickly capture the 3D viewport or preview buffer without full raytracing overhead. "
+            "Saves PNG to authorized workspace and returns verified file path."
+        ),
+    )
+    def capture_viewport(
+        width: int = 640,
+        height: int = 480,
+        output_filename: str = "renders/viewport.png",
+    ) -> Dict[str, Any]:
+        """Capture rapid viewport buffer image."""
+        try:
+            validated = CaptureViewportInput(
+                width=width,
+                height=height,
+                output_filename=output_filename,
+            )
+        except ValidationError as err:
+            return _validation_error_response(err)
+
+        cl = get_client()
+        resp = cl.send_command("capture_viewport", validated.model_dump(exclude_none=True), timeout=30.0)
         return resp.model_dump()
 
     return mcp

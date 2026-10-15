@@ -11,6 +11,7 @@ except ImportError:
     bpy = None
 
 from ..security import (
+    BlenderAgentError,
     FileAlreadyExistsError,
     InvalidArgumentError,
     SecurityViolationError,
@@ -59,11 +60,19 @@ def handle_render_preview(params: Dict[str, Any], context: Any = None) -> Dict[s
 
     # Parameter boundaries
     try:
-        width = max(64, min(4096, int(params.get("width", 640))))
-        height = max(64, min(4096, int(params.get("height", 480))))
-        samples = max(1, min(512, int(params.get("samples", 32))))
-    except (TypeError, ValueError) as err:
-        raise InvalidArgumentError(f"Render dimensions and samples must be positive integers: {err}")
+        w_val = int(params.get("width", 640))
+        h_val = int(params.get("height", 480))
+        s_val = int(params.get("samples", 32))
+        if not (64 <= w_val <= 4096 and 64 <= h_val <= 4096 and 1 <= s_val <= 512):
+            raise ValueError("Values outside allowable range.")
+        width = w_val
+        height = h_val
+        samples = s_val
+    except Exception as err:
+        raise InvalidArgumentError(f"Render dimensions (64..4096) and samples (1..512) must be positive integers: {err}")
+
+    if not bpy or not hasattr(bpy, "context") or not bpy.context:
+        raise BlenderAgentError("Blender environment not initialized: cannot perform render.")
 
     scene = bpy.context.scene
 
@@ -154,3 +163,91 @@ def handle_save_project(params: Dict[str, Any], context: Any = None) -> Dict[str
         "file_size_bytes": file_size,
         "is_copy": as_copy,
     }
+
+
+def handle_capture_viewport(params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
+    """Capture rapid viewport buffer (OpenGL / Workbench) without full path-tracing overhead."""
+    workspace = _get_workspace_dir(params)
+
+    raw_filename = params.get("output_filename", "renders/viewport.png")
+    if not isinstance(raw_filename, str) or not raw_filename.strip():
+        raw_filename = "renders/viewport.png"
+    if not (raw_filename.endswith(".png") or raw_filename.endswith(".jpg")):
+        raw_filename += ".png"
+
+    target_path = validate_workspace_path(workspace, raw_filename, allow_create_dir=True)
+
+    try:
+        w_val = int(params.get("width", 640))
+        h_val = int(params.get("height", 480))
+        if not (64 <= w_val <= 1920 and 64 <= h_val <= 1080):
+            raise ValueError("Dimensions out of range [64..1920] x [64..1080]")
+        width = w_val
+        height = h_val
+    except Exception as err:
+        raise InvalidArgumentError(f"Viewport capture dimensions must be integers in 64..1920 x 64..1080: {err}")
+
+    if not bpy or not hasattr(bpy, "context") or not bpy.context:
+        raise BlenderAgentError("Blender environment not initialized: cannot capture viewport.")
+
+    scene = bpy.context.scene
+    if not scene.camera:
+        cams = [o for o in bpy.data.objects if o.type == "CAMERA"]
+        if cams:
+            scene.camera = cams[0]
+        else:
+            cam_data = bpy.data.cameras.new(name="Camera")
+            cam_obj = bpy.data.objects.new(name="Camera", object_data=cam_data)
+            cam_obj.location = (5.0, -5.0, 4.0)
+            cam_obj.rotation_euler = (1.1, 0.0, 0.8)
+            scene.collection.objects.link(cam_obj)
+            scene.camera = cam_obj
+
+    orig_x = scene.render.resolution_x
+    orig_y = scene.render.resolution_y
+    orig_filepath = scene.render.filepath
+
+    scene.render.resolution_x = width
+    scene.render.resolution_y = height
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.filepath = str(target_path)
+
+    captured_opengl = False
+    if not bpy.app.background:
+        try:
+            bpy.ops.render.opengl(write_still=True)
+            captured_opengl = True
+        except Exception:
+            pass
+
+    if not captured_opengl:
+        # Fallback to fast 4-sample render
+        orig_samples = 32
+        if hasattr(scene, "cycles"):
+            orig_samples = scene.cycles.samples
+            scene.cycles.samples = 4
+        bpy.ops.render.render(write_still=True)
+        if hasattr(scene, "cycles"):
+            scene.cycles.samples = orig_samples
+
+    # Restore settings
+    scene.render.resolution_x = orig_x
+    scene.render.resolution_y = orig_y
+    scene.render.filepath = orig_filepath
+
+    if not target_path.exists():
+        raise InvalidArgumentError(f"Viewport capture failed: '{target_path.name}' was not created.")
+
+    file_size = target_path.stat().st_size
+    rel_path = str(target_path.relative_to(workspace)).replace("\\", "/")
+
+    return {
+        "file_path": str(target_path).replace("\\", "/"),
+        "relative_path": rel_path,
+        "width": width,
+        "height": height,
+        "file_size_bytes": file_size,
+        "mode": "opengl" if captured_opengl else "render_fallback",
+    }
+

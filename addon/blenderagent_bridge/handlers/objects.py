@@ -68,6 +68,45 @@ def handle_get_object_info(params: Dict[str, Any], context: Any = None) -> Dict[
     }
 
 
+def handle_get_mesh_info(params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
+    """Retrieve detailed mesh topology metrics (vertices, edges, polygons, UVs, vertex groups)."""
+    name = params.get("name")
+    obj = _find_object(name)
+    if obj.type != "MESH" or not hasattr(obj, "data") or not obj.data:
+        raise InvalidArgumentError(
+            f"Object '{obj.name}' is of type '{obj.type}', not 'MESH'.",
+            details={"object_name": obj.name, "object_type": obj.type},
+        )
+    mesh = obj.data
+    uv_layers = [uv.name for uv in mesh.uv_layers]
+    vertex_groups = [vg.name for vg in obj.vertex_groups]
+    materials = [m.name for m in mesh.materials if m]
+
+    is_manifold = True
+    try:
+        import bmesh
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        non_manifold = sum(1 for e in bm.edges if not e.is_manifold)
+        is_manifold = (non_manifold == 0)
+        bm.free()
+    except Exception:
+        pass
+
+    return {
+        "name": obj.name,
+        "type": obj.type,
+        "vertex_count": len(mesh.vertices),
+        "edge_count": len(mesh.edges),
+        "polygon_count": len(mesh.polygons),
+        "has_uvs": len(uv_layers) > 0,
+        "uv_layers": uv_layers,
+        "vertex_groups": vertex_groups,
+        "materials": materials,
+        "is_manifold": is_manifold,
+    }
+
+
 def handle_create_primitive(params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
     """Create a standard mesh primitive and assign transform properties."""
     raw_type = params.get("type", "cube")

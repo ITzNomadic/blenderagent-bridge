@@ -187,3 +187,20 @@ class SaveProjectInput(BaseModel):
     overwrite: Optional[bool] = Field(
         default=False, description="Must be true to overwrite an existing .blend file"
     )
+
+
+class GetMeshInfoInput(BaseModel):
+    name: str = Field(..., description="Name of the mesh object to inspect")
+
+
+class CaptureViewportInput(BaseModel):
+    width: Optional[int] = Field(
+        default=640, ge=64, le=1920, description="Viewport capture width in pixels"
+    )
+    height: Optional[int] = Field(
+        default=480, ge=64, le=1080, description="Viewport capture height in pixels"
+    )
+    output_filename: Optional[str] = Field(
+        default="renders/viewport.png", description="Relative path within workspace for viewport capture"
+    )
+

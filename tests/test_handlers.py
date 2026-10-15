@@ -76,3 +76,17 @@ def test_camera_validation_errors():
     with pytest.raises(InvalidArgumentError):
         dispatch_command("set_camera", {"focal_length": 0.0})
 
+
+def test_get_mesh_info_outside_blender():
+    with pytest.raises(BlenderAgentError):
+        dispatch_command("get_mesh_info", {"name": "Cube"})
+
+
+def test_capture_viewport_validation_errors(temp_workspace):
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("capture_viewport", {"width": 10})  # Min width is 64
+
+    with pytest.raises(InvalidArgumentError):
+        dispatch_command("capture_viewport", {"height": -100})
+
+
