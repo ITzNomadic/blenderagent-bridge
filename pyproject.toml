@@ -1,13 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "blenderagent-bridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Structured, verifiable, and secure MCP control bridge for Blender"
 authors = [{ name = "BlenderAgent Team", email = "dev@blenderagent.local" }]
-license = { text = "MIT" }
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,7 +19,16 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
+    "build>=1.0.0",
 ]
+
+[project.scripts]
+blenderagent-mcp = "mcp_server.server:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mcp_server*"]
+exclude = ["addon*", "workspace*", "tests*", "scripts*", "docs*"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

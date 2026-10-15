@@ -1,11 +1,11 @@
 schema_version = "1.0.0"
 id = "blenderagent_bridge"
-version = "0.1.0"
+version = "0.1.1"
 name = "BlenderAgent Bridge"
 tagline = "Structured, verifiable, and secure MCP control bridge for Blender"
 maintainer = "BlenderAgent Team <dev@blenderagent.local>"
 type = "add-on"
 blender_version_min = "4.2.0"
 license = ["SPDX:MIT"]
-website = "https://github.com/blenderagent/blenderagent-bridge"
+website = "https://github.com/ITzNomadic/blenderagent-bridge"
 tags = ["Development", "Automation", "Pipeline"]

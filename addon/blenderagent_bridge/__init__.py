@@ -5,12 +5,12 @@ from __future__ import annotations
 bl_info = {
     "name": "BlenderAgent Bridge",
     "author": "BlenderAgent Team",
-    "version": (0, 1, 0),
+    "version": (0, 1, 1),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > BlenderAgent",
     "description": "Structured, verifiable, and secure MCP control bridge for Blender",
     "category": "Development",
-    "doc_url": "https://github.com/blenderagent/blenderagent-bridge",
+    "doc_url": "https://github.com/ITzNomadic/blenderagent-bridge",
 }
 
 import os
