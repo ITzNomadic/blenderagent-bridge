@@ -88,6 +88,16 @@ def handle_set_material(params: Dict[str, Any], context: Any = None) -> Dict[str
     if "Roughness" in bsdf.inputs:
         bsdf.inputs["Roughness"].default_value = roughness
 
+    # Synchronize with Viewport Display settings (essential for Solid Shading mode)
+    try:
+        mat.diffuse_color = color_rgba
+        if hasattr(mat, "roughness"):
+            mat.roughness = roughness
+        if hasattr(mat, "metallic"):
+            mat.metallic = metallic
+    except Exception:
+        pass
+
     # Assign to target object's data
     if hasattr(obj, "data") and obj.data and hasattr(obj.data, "materials"):
         if len(obj.data.materials) == 0:
