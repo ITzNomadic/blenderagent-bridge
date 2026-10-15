@@ -1,12 +1,23 @@
-"""Command-line interface for headless, automated, and diagnostic installer operations."""
+"""Command-line interface and entrypoint for BlenderAgent Bridge v0.2.0 Windows Installer."""
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import asdict
 import json
+import os
 import pathlib
 import sys
+
+# Ensure repository root / frozen bundle directory is in sys.path
+if getattr(sys, "frozen", False):
+    bundle_dir = pathlib.Path(sys._MEIPASS).resolve()
+    if str(bundle_dir) not in sys.path:
+        sys.path.insert(0, str(bundle_dir))
+else:
+    repo_root = pathlib.Path(__file__).parent.parent.resolve()
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
 
 # In Windows GUI mode, attach to parent terminal console if invoked from CLI
 if sys.platform == "win32":
@@ -19,14 +30,26 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# Ensure stdout and stderr are never None in --noconsole mode
+if sys.stdout is None:
+    try:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+if sys.stderr is None:
+    try:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    except Exception:
+        pass
+
 try:
-    from .constants import DEFAULT_PORT, DEFAULT_WORKSPACE_DIR, VERSION
-    from .detector import detect_system_state
-    from .orchestrator import InstallationOrchestrator, InstallOptions
-except ImportError:
     from installer.constants import DEFAULT_PORT, DEFAULT_WORKSPACE_DIR, VERSION
     from installer.detector import detect_system_state
     from installer.orchestrator import InstallationOrchestrator, InstallOptions
+except ImportError:
+    from .constants import DEFAULT_PORT, DEFAULT_WORKSPACE_DIR, VERSION
+    from .detector import detect_system_state
+    from .orchestrator import InstallationOrchestrator, InstallOptions
 
 
 def main():
@@ -43,14 +66,34 @@ def main():
 
     args = parser.parse_args()
 
-    # Default to GUI if no explicit operation flag is passed and display is available
-    if len(sys.argv) == 1 or args.gui:
+    # Determine if an explicit headless CLI operation was requested
+    is_cli_action = any([args.install, args.detect, args.repair, args.uninstall])
+
+    # Default to GUI when double-clicked or executed without explicit CLI action flags
+    if not is_cli_action or args.gui:
         try:
-            from .gui import launch_gui
+            try:
+                from installer.gui import launch_gui
+            except ImportError:
+                from .gui import launch_gui
             launch_gui()
             return 0
         except Exception as err:
-            print(f"[!] Warning: Graphical interface unavailable ({err}). Falling back to CLI mode.")
+            import traceback
+            tb = traceback.format_exc()
+            if sys.platform == "win32":
+                try:
+                    import ctypes
+                    ctypes.windll.user32.MessageBoxW(
+                        0,
+                        f"An error occurred while launching BlenderAgent Bridge Installer:\n\n{err}\n\n{tb[:500]}",
+                        "BlenderAgent Bridge Installer Error",
+                        0x10,  # MB_ICONERROR
+                    )
+                except Exception:
+                    pass
+            print(f"[!] Error launching graphical interface: {err}\n{tb}")
+            return 1
 
     if args.detect:
         state = detect_system_state()

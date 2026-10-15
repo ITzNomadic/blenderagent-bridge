@@ -13,16 +13,17 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 from typing import Optional
 
+# Ensure repository root / frozen bundle directory is in sys.path
+if getattr(sys, "frozen", False):
+    bundle_dir = pathlib.Path(sys._MEIPASS).resolve()
+    if str(bundle_dir) not in sys.path:
+        sys.path.insert(0, str(bundle_dir))
+else:
+    repo_root = pathlib.Path(__file__).parent.parent.resolve()
+    if str(repo_root) not in sys.path:
+        sys.path.insert(0, str(repo_root))
+
 try:
-    from .constants import (
-        APP_NAME,
-        DEFAULT_PORT,
-        DEFAULT_WORKSPACE_DIR,
-        VERSION,
-    )
-    from .detector import BlenderInstallation, SystemDetectionResult, detect_system_state
-    from .orchestrator import InstallationOrchestrator, InstallOptions, StepProgress
-except ImportError:
     from installer.constants import (
         APP_NAME,
         DEFAULT_PORT,
@@ -31,6 +32,15 @@ except ImportError:
     )
     from installer.detector import BlenderInstallation, SystemDetectionResult, detect_system_state
     from installer.orchestrator import InstallationOrchestrator, InstallOptions, StepProgress
+except ImportError:
+    from .constants import (
+        APP_NAME,
+        DEFAULT_PORT,
+        DEFAULT_WORKSPACE_DIR,
+        VERSION,
+    )
+    from .detector import BlenderInstallation, SystemDetectionResult, detect_system_state
+    from .orchestrator import InstallationOrchestrator, InstallOptions, StepProgress
 
 
 # Enable High-DPI awareness on Windows 10/11

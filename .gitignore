@@ -56,6 +56,7 @@ Desktop.ini
 .blenderagent_token
 .blenderagent_session.json
 workspace/*.blend
+workspace/scenes/
 workspace/renders/*.png
 !workspace/renders/.gitkeep
 !workspace/.gitkeep

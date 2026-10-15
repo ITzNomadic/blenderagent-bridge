@@ -84,13 +84,27 @@ def build_all():
     ]
 
     hidden_imports = [
+        "--collect-all=installer",
         "--hidden-import=tomli",
         "--hidden-import=tomli_w",
         "--hidden-import=tkinter",
         "--hidden-import=tkinter.ttk",
+        "--hidden-import=tkinter.messagebox",
+        "--hidden-import=tkinter.filedialog",
         "--hidden-import=httpx",
         "--hidden-import=ctypes",
         "--hidden-import=winreg",
+        "--hidden-import=installer",
+        "--hidden-import=installer.constants",
+        "--hidden-import=installer.detector",
+        "--hidden-import=installer.orchestrator",
+        "--hidden-import=installer.gui",
+        "--hidden-import=installer.addon_manager",
+        "--hidden-import=installer.security_manager",
+        "--hidden-import=installer.adapters",
+        "--hidden-import=installer.adapters.base",
+        "--hidden-import=installer.adapters.antigravity",
+        "--hidden-import=installer.adapters.codex",
     ]
 
     cmd_setup = [

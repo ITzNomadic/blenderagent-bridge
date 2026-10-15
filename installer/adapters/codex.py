@@ -226,11 +226,39 @@ class CodexAdapter(ClientAdapter):
             return AdapterResult(success=True, status=AdapterStatus.COMPATIBLE, message="Nothing to uninstall.")
 
         backup_file = self.backup_config()
+
+        # Method 1: Clean structured removal via tomli_w if available
+        if tomllib and tomli_w:
+            try:
+                with open(self._config_path, "rb") as f:
+                    data = tomllib.load(f)
+                if "mcp_servers" in data and isinstance(data["mcp_servers"], dict):
+                    removed = False
+                    for key in list(data["mcp_servers"].keys()):
+                        if key.lower() == APP_ID.lower():
+                            del data["mcp_servers"][key]
+                            removed = True
+                    if removed:
+                        new_content = tomli_w.dumps(data)
+                        tmp = self._config_path.with_suffix(".tmp")
+                        with open(tmp, "w", encoding="utf-8") as f:
+                            f.write(new_content)
+                        tmp.replace(self._config_path)
+                        return AdapterResult(
+                            success=True,
+                            status=AdapterStatus.COMPATIBLE,
+                            message=f"Removed '{APP_ID}' from Codex configuration.",
+                            backup_file=backup_file,
+                        )
+            except Exception:
+                pass
+
+        # Method 2: Text regex fallback
         try:
             with open(self._config_path, "r", encoding="utf-8") as f:
                 content = f.read()
 
-            pattern = rf"\n*\[mcp_servers\.{re.escape(APP_ID)}\][^\[]*"
+            pattern = rf"\n*\[mcp_servers\.(?:{re.escape(APP_ID)}|\"{re.escape(APP_ID)}\")\][^\[]*"
             new_content = re.sub(pattern, "", content)
 
             if tomllib:
