@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import pathlib
 import secrets
@@ -12,6 +13,7 @@ import socket
 import sys
 import threading
 from typing import Any, Dict, Optional, Tuple
+import urllib.parse
 
 from .queue_manager import queue_manager
 from .security import (
@@ -126,13 +128,17 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
         # 3. Origin header check (against CSRF from local browsers)
         origin_header = self.headers.get("Origin")
         if origin_header and origin_header != "null":
-            allowed = (
-                f"http://127.0.0.1:{self.server_port}",
-                f"http://localhost:{self.server_port}",
-                "http://127.0.0.1",
-                "http://localhost",
-            )
-            if not any(origin_header.startswith(a) for a in allowed):
+            is_valid_origin = False
+            try:
+                parsed_origin = urllib.parse.urlsplit(origin_header)
+                if parsed_origin.scheme in ("http", "https"):
+                    if parsed_origin.hostname in ("127.0.0.1", "localhost"):
+                        if parsed_origin.port is None or parsed_origin.port == self.server_port:
+                            is_valid_origin = True
+            except Exception:
+                is_valid_origin = False
+
+            if not is_valid_origin:
                 audit_logger.log("CSRF_BLOCKED", "BLOCKED", f"Rejected Origin: '{origin_header}'", client_ip)
                 self._send_json_response({
                     "status": "error",
@@ -148,24 +154,40 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
 
     @classmethod
     def _read_session_token_from_disk(cls) -> Optional[str]:
-        """Attempt to read token from workspace or global live session file on disk."""
+        """Attempt to read token from workspace or global live session file on disk, validating metadata."""
+        current_pid = os.getpid()
+        current_port = getattr(cls, "server_port", None)
+        current_ws = getattr(cls, "workspace_dir", None)
+
         candidates = []
-        if getattr(cls, "workspace_dir", None):
-            candidates.append(pathlib.Path(cls.workspace_dir) / ".blenderagent_session.json")
+        if current_ws:
+            candidates.append((pathlib.Path(current_ws) / ".blenderagent_session.json", True))
         try:
             from .security import get_global_session_file
-            candidates.append(get_global_session_file())
+            candidates.append((get_global_session_file(), False))
         except Exception:
             pass
 
-        for p in candidates:
+        for p, is_local in candidates:
             if p and p.exists():
                 try:
                     with open(p, "r", encoding="utf-8") as f:
                         data = json.load(f)
                     tok = data.get("token")
-                    if tok and isinstance(tok, str) and len(tok) == 32:
+                    if not tok or not isinstance(tok, str) or len(tok) != 32:
+                        continue
+
+                    file_port = data.get("port")
+                    file_pid = data.get("pid")
+
+                    if is_local:
+                        if current_port and file_port and file_port != current_port:
+                            continue
                         return tok
+                    else:
+                        # Global session file MUST match this instance's PID and port
+                        if file_pid == current_pid and (current_port is None or file_port == current_port):
+                            return tok
                 except Exception:
                     pass
         return None
@@ -230,8 +252,9 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json_response({
                 "status": "healthy",
                 "service": "blenderagent-bridge",
-                "version": "0.1.1",
-                "active_tasks": audit_logger.total_count,
+                "version": "0.2.0",
+                "active_tasks": queue_manager.active_count,
+                "processed_total": audit_logger.total_count,
             })
             return
 
@@ -325,6 +348,18 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             }, status_code=400)
             return
 
+        if not isinstance(payload, dict):
+            audit_logger.log("BAD_REQUEST", "ERROR", "Payload is not a JSON object", client_ip)
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "INVALID_JSON",
+                    "message": "Request payload must be a JSON object.",
+                },
+                "message": "Bad Request: JSON object expected.",
+            }, status_code=400)
+            return
+
         command_name = payload.get("command")
         if not command_name or not isinstance(command_name, str):
             self._send_json_response({
@@ -364,8 +399,30 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
         params["workspace_dir"] = str(self.workspace_dir)
 
         request_id = payload.get("request_id")
-        timeout = float(payload.get("timeout", 30.0))
+        if request_id is not None and not isinstance(request_id, str):
+            request_id = str(request_id)
+
+        try:
+            raw_timeout = payload.get("timeout", 30.0)
+            timeout = float(raw_timeout)
+            if math.isnan(timeout) or math.isinf(timeout) or timeout <= 0:
+                raise ValueError("Timeout must be a positive finite number.")
+            timeout = min(timeout, 300.0)
+        except Exception as timeout_err:
+            self._send_json_response({
+                "status": "error",
+                "error": {
+                    "code": "INVALID_ARGUMENT",
+                    "message": f"Field 'timeout' must be a positive finite number: {timeout_err}",
+                },
+                "message": "Bad Request: Invalid timeout.",
+                "request_id": request_id,
+            }, status_code=400)
+            return
+
         idempotency_key = payload.get("idempotency_key") or self.headers.get("Idempotency-Key")
+        if idempotency_key is not None and not isinstance(idempotency_key, str):
+            idempotency_key = str(idempotency_key)
 
         # Dispatch to thread-safe execution queue
         response_dict = queue_manager.submit_task(
@@ -491,7 +548,7 @@ class BlenderAgentServer:
         queue_manager.stop()
 
         # Remove session file
-        remove_session_file(self._workspace)
+        remove_session_file(self._workspace, pid=os.getpid(), port=self._port)
         audit_logger.log("SERVER_STOP", "INACTIVE", "Bridge stopped cleanly.")
 
         return True, "BlenderAgent Bridge stopped."

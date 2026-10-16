@@ -14,7 +14,7 @@ from .server import bridge_server
 
 
 class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
-    """Sidebar Panel for BlenderAgent Bridge status, configuration, and monitoring."""
+    """Main Sidebar Panel for BlenderAgent Bridge status and monitoring."""
 
     bl_label = "BlenderAgent Bridge"
     bl_idname = "VIEW3D_PT_blenderagent_bridge"
@@ -24,7 +24,6 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
 
     def draw(self, context):
         layout = self.layout
-        scene = context.scene
 
         # 1. Connection Status Banner
         is_running = bridge_server.is_running
@@ -45,26 +44,14 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
         else:
             row_ctrl.operator("wm.blenderagent_stop_bridge", text="Stop Bridge", icon="PAUSE")
 
-        # 3. Connection & Workspace Configuration
-        layout.separator()
-        box_config = layout.box()
-        box_config.label(text="Configuration", icon="PREFERENCES")
-
-        wm = context.window_manager
-        props_target = wm if hasattr(wm, "blenderagent_port") else scene
-
-        col = box_config.column(align=True)
-        col.prop(props_target, "blenderagent_port", text="Port")
-        col.prop(props_target, "blenderagent_workspace_dir", text="Workspace")
-
-        # 4. Activity & Metrics
+        # 3. Activity & Metrics
         layout.separator()
         box_activity = layout.box()
         header_row = box_activity.row()
         header_row.label(text=f"Processed: {audit_logger.total_count} commands", icon="CONSOLE")
         header_row.operator("wm.blenderagent_clear_log", text="", icon="TRASH")
 
-        # 5. Compact Operational Log
+        # 4. Compact Operational Log
         recent = audit_logger.get_recent(5)
         if recent:
             log_col = box_activity.column(align=True)
@@ -76,14 +63,34 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
         else:
             box_activity.label(text="No recent operations", icon="INFO")
 
-        # 6. Advanced Diagnostics
+
+class VIEW3D_PT_BlenderAgentBridgeAdvancedPanel(Panel):
+    """Collapsible Advanced Settings subpanel kept closed during normal usage."""
+
+    bl_label = "Advanced Settings"
+    bl_idname = "VIEW3D_PT_blenderagent_bridge_advanced"
+    bl_space_type = "VIEW_3D"
+    bl_region_type = "UI"
+    bl_category = "BlenderAgent"
+    bl_parent_id = "VIEW3D_PT_blenderagent_bridge"
+    bl_options = {"DEFAULT_CLOSED"}
+
+    def draw(self, context):
+        layout = self.layout
+        wm = context.window_manager
+        scene = context.scene
+        props_target = wm if hasattr(wm, "blenderagent_port") else scene
+
+        col = layout.column(align=True)
+        col.prop(props_target, "blenderagent_port", text="Port")
+        col.prop(props_target, "blenderagent_workspace_dir", text="Workspace")
+
         layout.separator()
-        box_diag = layout.box()
-        row_diag = box_diag.row(align=True)
-        row_diag.label(text="Diagnostics", icon="SETTINGS")
-        row_diag.operator("wm.blenderagent_regenerate_token", text="Reset Credential", icon="FILE_REFRESH")
+        row = layout.row()
+        row.operator("wm.blenderagent_regenerate_token", text="Reset Credential", icon="FILE_REFRESH")
 
 
 PANEL_CLASSES = [
     VIEW3D_PT_BlenderAgentBridgePanel,
+    VIEW3D_PT_BlenderAgentBridgeAdvancedPanel,
 ]

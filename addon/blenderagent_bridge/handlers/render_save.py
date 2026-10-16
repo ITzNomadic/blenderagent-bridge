@@ -19,6 +19,24 @@ from ..security import (
 )
 
 
+def _parse_strict_bool(val: Any, default: bool = False, param_name: str = "parameter") -> bool:
+    """Strictly parse a boolean parameter, rejecting ambiguous strings and non-boolean structures."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        v = val.strip().lower()
+        if v in ("true", "1", "yes"):
+            return True
+        if v in ("false", "0", "no"):
+            return False
+        raise InvalidArgumentError(f"Parameter '{param_name}' must be a boolean ('true'/'false'), got '{val}'.")
+    if isinstance(val, (int, float)):
+        return bool(val)
+    raise InvalidArgumentError(f"Parameter '{param_name}' must be a boolean.")
+
+
 def _get_workspace_dir(params: Dict[str, Any]) -> pathlib.Path:
     """Resolve the authoritative workspace directory from server configuration."""
     # 1. Authoritative server configuration
@@ -58,6 +76,13 @@ def handle_render_preview(params: Dict[str, Any], context: Any = None) -> Dict[s
 
     target_path = validate_workspace_path(workspace, raw_filename, allow_create_dir=True)
 
+    overwrite = _parse_strict_bool(params.get("overwrite"), default=True, param_name="overwrite")
+    if target_path.exists() and not overwrite:
+        raise FileAlreadyExistsError(
+            f"Render target file '{raw_filename}' already exists. Set 'overwrite=true' to replace it.",
+            details={"file_path": str(target_path)},
+        )
+
     # Parameter boundaries
     try:
         w_val = int(params.get("width", 640))
@@ -72,18 +97,16 @@ def handle_render_preview(params: Dict[str, Any], context: Any = None) -> Dict[s
         raise InvalidArgumentError(f"Render dimensions (64..4096) and samples (1..512) must be positive integers: {err}")
 
     if not bpy or not hasattr(bpy, "context") or not bpy.context:
-        raise BlenderAgentError("Blender environment not initialized: cannot perform render.")
+        raise BlenderAgentError("ENV_NOT_INITIALIZED", "Blender environment not initialized: cannot perform render.")
 
     scene = bpy.context.scene
 
     # Verify or create camera
     if not scene.camera:
-        # Search for any camera in scene
         cams = [o for o in bpy.data.objects if o.type == "CAMERA"]
         if cams:
             scene.camera = cams[0]
         else:
-            # Create a default camera
             cam_data = bpy.data.cameras.new(name="Camera")
             cam_obj = bpy.data.objects.new(name="Camera", object_data=cam_data)
             cam_obj.location = (5.0, -5.0, 4.0)
@@ -91,24 +114,44 @@ def handle_render_preview(params: Dict[str, Any], context: Any = None) -> Dict[s
             scene.collection.objects.link(cam_obj)
             scene.camera = cam_obj
 
-    # Configure render settings
-    scene.render.resolution_x = width
-    scene.render.resolution_y = height
-    scene.render.resolution_percentage = 100
-    scene.render.image_settings.file_format = "PNG"
-    scene.render.filepath = str(target_path)
+    # Save original settings for guaranteed restoration
+    orig_x = scene.render.resolution_x
+    orig_y = scene.render.resolution_y
+    orig_pct = scene.render.resolution_percentage
+    orig_fmt = scene.render.image_settings.file_format
+    orig_filepath = scene.render.filepath
+    orig_cycles_samples = getattr(scene.cycles, "samples", None) if hasattr(scene, "cycles") else None
+    orig_eevee_samples = getattr(scene.eevee, "taa_render_samples", None) if hasattr(scene, "eevee") else None
 
-    # Configure sampling depending on engine
-    if scene.render.engine == "CYCLES":
-        if hasattr(scene, "cycles"):
-            scene.cycles.samples = samples
-    elif hasattr(scene, "eevee"):
-        # Eevee Next / standard Eevee
-        if hasattr(scene.eevee, "taa_render_samples"):
-            scene.eevee.taa_render_samples = min(samples, 64)
+    try:
+        # Configure render settings
+        scene.render.resolution_x = width
+        scene.render.resolution_y = height
+        scene.render.resolution_percentage = 100
+        scene.render.image_settings.file_format = "PNG"
+        scene.render.filepath = str(target_path)
 
-    # Perform render synchronously on main thread
-    bpy.ops.render.render(write_still=True)
+        # Configure sampling depending on engine
+        if scene.render.engine == "CYCLES":
+            if hasattr(scene, "cycles"):
+                scene.cycles.samples = samples
+        elif hasattr(scene, "eevee"):
+            if hasattr(scene.eevee, "taa_render_samples"):
+                scene.eevee.taa_render_samples = min(samples, 64)
+
+        # Perform render synchronously on main thread
+        bpy.ops.render.render(write_still=True)
+    finally:
+        # Always restore original scene render settings
+        scene.render.resolution_x = orig_x
+        scene.render.resolution_y = orig_y
+        scene.render.resolution_percentage = orig_pct
+        scene.render.image_settings.file_format = orig_fmt
+        scene.render.filepath = orig_filepath
+        if orig_cycles_samples is not None and hasattr(scene, "cycles"):
+            scene.cycles.samples = orig_cycles_samples
+        if orig_eevee_samples is not None and hasattr(scene, "eevee") and hasattr(scene.eevee, "taa_render_samples"):
+            scene.eevee.taa_render_samples = orig_eevee_samples
 
     if not target_path.exists():
         raise InvalidArgumentError(f"Render completed but output file '{target_path.name}' was not created.")
@@ -140,7 +183,7 @@ def handle_save_project(params: Dict[str, Any], context: Any = None) -> Dict[str
 
     target_path = validate_workspace_path(workspace, filename, allow_create_dir=True)
 
-    overwrite = bool(params.get("overwrite", False))
+    overwrite = _parse_strict_bool(params.get("overwrite"), default=False, param_name="overwrite")
     if target_path.exists() and not overwrite:
         raise FileAlreadyExistsError(
             f"File '{filename}' already exists in workspace. Set 'overwrite=true' to overwrite it.",
@@ -148,7 +191,7 @@ def handle_save_project(params: Dict[str, Any], context: Any = None) -> Dict[str
         )
 
     # Save copy of current mainfile
-    as_copy = bool(params.get("copy", True))
+    as_copy = _parse_strict_bool(params.get("copy"), default=True, param_name="copy")
     bpy.ops.wm.save_as_mainfile(filepath=str(target_path), copy=as_copy)
 
     if not target_path.exists():
@@ -177,6 +220,13 @@ def handle_capture_viewport(params: Dict[str, Any], context: Any = None) -> Dict
 
     target_path = validate_workspace_path(workspace, raw_filename, allow_create_dir=True)
 
+    overwrite = _parse_strict_bool(params.get("overwrite"), default=True, param_name="overwrite")
+    if target_path.exists() and not overwrite:
+        raise FileAlreadyExistsError(
+            f"Viewport capture file '{raw_filename}' already exists. Set 'overwrite=true' to replace it.",
+            details={"file_path": str(target_path)},
+        )
+
     try:
         w_val = int(params.get("width", 640))
         h_val = int(params.get("height", 480))
@@ -188,7 +238,7 @@ def handle_capture_viewport(params: Dict[str, Any], context: Any = None) -> Dict
         raise InvalidArgumentError(f"Viewport capture dimensions must be integers in 64..1920 x 64..1080: {err}")
 
     if not bpy or not hasattr(bpy, "context") or not bpy.context:
-        raise BlenderAgentError("Blender environment not initialized: cannot capture viewport.")
+        raise BlenderAgentError("ENV_NOT_INITIALIZED", "Blender environment not initialized: cannot capture viewport.")
 
     scene = bpy.context.scene
     if not scene.camera:
@@ -203,38 +253,43 @@ def handle_capture_viewport(params: Dict[str, Any], context: Any = None) -> Dict
             scene.collection.objects.link(cam_obj)
             scene.camera = cam_obj
 
+    # Save original settings for guaranteed restoration
     orig_x = scene.render.resolution_x
     orig_y = scene.render.resolution_y
+    orig_pct = scene.render.resolution_percentage
+    orig_fmt = scene.render.image_settings.file_format
     orig_filepath = scene.render.filepath
-
-    scene.render.resolution_x = width
-    scene.render.resolution_y = height
-    scene.render.resolution_percentage = 100
-    scene.render.image_settings.file_format = "PNG"
-    scene.render.filepath = str(target_path)
+    orig_cycles_samples = getattr(scene.cycles, "samples", None) if hasattr(scene, "cycles") else None
 
     captured_opengl = False
-    if not bpy.app.background:
-        try:
-            bpy.ops.render.opengl(write_still=True)
-            captured_opengl = True
-        except Exception:
-            pass
+    try:
+        scene.render.resolution_x = width
+        scene.render.resolution_y = height
+        scene.render.resolution_percentage = 100
+        scene.render.image_settings.file_format = "PNG"
+        scene.render.filepath = str(target_path)
 
-    if not captured_opengl:
-        # Fallback to fast 4-sample render
-        orig_samples = 32
-        if hasattr(scene, "cycles"):
-            orig_samples = scene.cycles.samples
-            scene.cycles.samples = 4
-        bpy.ops.render.render(write_still=True)
-        if hasattr(scene, "cycles"):
-            scene.cycles.samples = orig_samples
+        if not bpy.app.background:
+            try:
+                bpy.ops.render.opengl(write_still=True)
+                captured_opengl = True
+            except Exception:
+                pass
 
-    # Restore settings
-    scene.render.resolution_x = orig_x
-    scene.render.resolution_y = orig_y
-    scene.render.filepath = orig_filepath
+        if not captured_opengl:
+            # Fallback to fast 4-sample render
+            if hasattr(scene, "cycles"):
+                scene.cycles.samples = 4
+            bpy.ops.render.render(write_still=True)
+    finally:
+        # Restore all settings in finally
+        scene.render.resolution_x = orig_x
+        scene.render.resolution_y = orig_y
+        scene.render.resolution_percentage = orig_pct
+        scene.render.image_settings.file_format = orig_fmt
+        scene.render.filepath = orig_filepath
+        if orig_cycles_samples is not None and hasattr(scene, "cycles"):
+            scene.cycles.samples = orig_cycles_samples
 
     if not target_path.exists():
         raise InvalidArgumentError(f"Viewport capture failed: '{target_path.name}' was not created.")
@@ -250,4 +305,3 @@ def handle_capture_viewport(params: Dict[str, Any], context: Any = None) -> Dict
         "file_size_bytes": file_size,
         "mode": "opengl" if captured_opengl else "render_fallback",
     }
-

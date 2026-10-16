@@ -15,7 +15,15 @@ from typing import Any, Dict, List, Optional, Tuple
 class BlenderAgentError(Exception):
     """Base error for all BlenderAgent Bridge exceptions."""
 
-    def __init__(self, code: str, message: str, details: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        code: str = "BLENDER_AGENT_ERROR",
+        message: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
+    ):
+        if message is None:
+            message = code
+            code = "BLENDER_AGENT_ERROR"
         super().__init__(message)
         self.code = code
         self.message = message
@@ -159,8 +167,30 @@ def get_global_session_file() -> pathlib.Path:
     return dir_path / "live_session.json"
 
 
+def _atomic_write_json(target_path: pathlib.Path, data: Dict[str, Any]) -> None:
+    """Safely write JSON to a temporary file and atomically replace target."""
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = target_path.with_name(f"{target_path.name}.tmp.{os.getpid()}_{time.time_ns()}")
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        if os.name != "nt":
+            try:
+                os.chmod(tmp_path, 0o600)
+            except Exception:
+                pass
+        os.replace(tmp_path, target_path)
+    except Exception:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+        raise
+
+
 def write_session_file(token: str, port: int, workspace_dir: str | pathlib.Path) -> pathlib.Path:
-    """Write session metadata to .blenderagent_session.json in workspace and global live_session.json."""
+    """Write session metadata atomically to .blenderagent_session.json and global live_session.json."""
     base = pathlib.Path(workspace_dir).resolve()
     base.mkdir(parents=True, exist_ok=True)
     session_file = base / ".blenderagent_session.json"
@@ -173,33 +203,64 @@ def write_session_file(token: str, port: int, workspace_dir: str | pathlib.Path)
         "created_at": time.time(),
         "host": "127.0.0.1",
     }
-    with open(session_file, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    _atomic_write_json(session_file, data)
 
     try:
         global_file = get_global_session_file()
-        with open(global_file, "w", encoding="utf-8") as gf:
-            json.dump(data, gf, indent=2)
+        _atomic_write_json(global_file, data)
     except Exception:
         pass
 
     return session_file
 
 
-def remove_session_file(workspace_dir: str | pathlib.Path) -> None:
-    """Remove session file on shutdown."""
+def remove_session_file(
+    workspace_dir: str | pathlib.Path,
+    pid: Optional[int] = None,
+    port: Optional[int] = None,
+) -> None:
+    """Remove session file on shutdown, verifying ownership to avoid clobbering other instances."""
+    target_pid = pid if pid is not None else os.getpid()
+
     try:
         base = pathlib.Path(workspace_dir).resolve()
         session_file = base / ".blenderagent_session.json"
         if session_file.exists():
-            session_file.unlink()
+            should_unlink = True
+            try:
+                with open(session_file, "r", encoding="utf-8") as f:
+                    sdata = json.load(f)
+                if sdata.get("pid") is not None and sdata.get("pid") != target_pid:
+                    should_unlink = False
+            except Exception:
+                pass
+            if should_unlink:
+                try:
+                    session_file.unlink()
+                except FileNotFoundError:
+                    pass
     except Exception:
         pass
 
     try:
         global_file = get_global_session_file()
         if global_file.exists():
-            global_file.unlink()
+            should_unlink = False
+            try:
+                with open(global_file, "r", encoding="utf-8") as gf:
+                    gdata = json.load(gf)
+                # Only remove if global file explicitly matches this instance's PID and port
+                if gdata.get("pid") == target_pid:
+                    if port is None or gdata.get("port") == port:
+                        should_unlink = True
+            except Exception:
+                should_unlink = False
+
+            if should_unlink:
+                try:
+                    global_file.unlink()
+                except FileNotFoundError:
+                    pass
     except Exception:
         pass
 

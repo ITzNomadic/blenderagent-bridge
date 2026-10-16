@@ -82,16 +82,22 @@ def handle_get_mesh_info(params: Dict[str, Any], context: Any = None) -> Dict[st
     vertex_groups = [vg.name for vg in obj.vertex_groups]
     materials = [m.name for m in mesh.materials if m]
 
-    is_manifold = True
+    is_manifold = None
+    bm = None
     try:
         import bmesh
         bm = bmesh.new()
         bm.from_mesh(mesh)
         non_manifold = sum(1 for e in bm.edges if not e.is_manifold)
         is_manifold = (non_manifold == 0)
-        bm.free()
     except Exception:
-        pass
+        is_manifold = None
+    finally:
+        if bm is not None:
+            try:
+                bm.free()
+            except Exception:
+                pass
 
     return {
         "name": obj.name,
@@ -171,16 +177,20 @@ def handle_create_primitive(params: Dict[str, Any], context: Any = None) -> Dict
 
 
 def handle_transform_object(params: Dict[str, Any], context: Any = None) -> Dict[str, Any]:
-    """Modify spatial transformations (location, rotation, scale) of an existing object."""
+    """Modify spatial transformations (location, rotation, scale) of an existing object with atomic validation."""
     name = params.get("name")
     obj = _find_object(name)
 
+    new_loc = None
+    new_rot = None
+    new_scale = None
+
     if "location" in params and params["location"] is not None:
-        obj.location = _parse_vector_3d(params["location"], "location")
+        new_loc = _parse_vector_3d(params["location"], "location")
 
     if "rotation" in params and params["rotation"] is not None:
         rot_deg = _parse_vector_3d(params["rotation"], "rotation")
-        obj.rotation_euler = (
+        new_rot = (
             math.radians(rot_deg[0]),
             math.radians(rot_deg[1]),
             math.radians(rot_deg[2]),
@@ -191,7 +201,15 @@ def handle_transform_object(params: Dict[str, Any], context: Any = None) -> Dict
         for idx, s in enumerate(sc):
             if abs(s) < 1e-6:
                 raise InvalidArgumentError(f"Scale factor at index {idx} cannot be zero.")
-        obj.scale = sc
+        new_scale = sc
+
+    # Apply atomically only after all validations have passed
+    if new_loc is not None:
+        obj.location = new_loc
+    if new_rot is not None:
+        obj.rotation_euler = new_rot
+    if new_scale is not None:
+        obj.scale = new_scale
 
     return {
         "name": obj.name,

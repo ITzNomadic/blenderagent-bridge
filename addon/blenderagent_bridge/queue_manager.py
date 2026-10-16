@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import collections
+import copy
 from enum import Enum
+import hashlib
+import json
 import queue
 import threading
 import time
@@ -21,6 +24,16 @@ from .security import (
     ExecutionTimeoutError,
     audit_logger,
 )
+
+
+def _hash_payload(command: str, params: Dict[str, Any]) -> str:
+    """Stable hash of command and parameters ignoring dynamic workspace_dir."""
+    filtered = {k: v for k, v in params.items() if k != "workspace_dir"}
+    try:
+        raw = json.dumps({"cmd": command, "params": filtered}, sort_keys=True)
+    except Exception:
+        raw = str(filtered)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class TaskStatus(str, Enum):
@@ -100,11 +113,23 @@ class ExecutionQueueManager:
         self._tasks_history: collections.deque[CommandTask] = collections.deque(maxlen=history_size)
         self._tasks_by_id: Dict[str, CommandTask] = {}
         self._idempotency_cache: Dict[str, Dict[str, Any]] = {}
+        self._in_flight_idempotency: Dict[str, CommandTask] = {}
+        self._cache_max_size = 200
+        self._cache_ttl_seconds = 600.0  # 10 minutes
 
     @property
     def is_running(self) -> bool:
         with self._lock:
             return self._is_timer_running
+
+    @property
+    def active_count(self) -> int:
+        """Count of tasks currently queued or running."""
+        with self._lock:
+            return sum(
+                1 for t in self._tasks_by_id.values()
+                if t.status in (TaskStatus.QUEUED, TaskStatus.RUNNING)
+            )
 
     def process_queue_tick(self) -> Optional[float]:
         """Timer callback invoked strictly on Blender's main thread.
@@ -231,9 +256,11 @@ class ExecutionQueueManager:
                         bpy.app.timers.register(self.process_queue_tick, first_interval=0.01, persistent=True)
 
     def stop(self) -> None:
-        """Unregister timer and cleanly drain/cancel all pending tasks."""
+        """Unregister timer, cleanly drain/cancel all pending tasks, and clear caches."""
         with self._lock:
             self._is_timer_running = False
+            self._idempotency_cache.clear()
+            self._in_flight_idempotency.clear()
 
         if bpy and hasattr(bpy, "app") and hasattr(bpy.app, "timers"):
             if bpy.app.timers.is_registered(self.process_queue_tick):
@@ -285,7 +312,7 @@ class ExecutionQueueManager:
                 return True, f"Queued task '{task_id}' cancelled immediately."
             else:
                 task.status = TaskStatus.CANCEL_REQUESTED
-                return True, f"Running task '{task_id}' marked for cancellation."
+                return True, f"Running task '{task_id}' marked for cancellation. Note: synchronous in-flight Blender operations cannot be preempted immediately."
 
     def submit_task(
         self,
@@ -295,7 +322,10 @@ class ExecutionQueueManager:
         request_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Enqueue task and wait for completion or timeout."""
+        """Enqueue task and wait for completion or timeout with robust idempotency and in-flight deduplication."""
+        payload_hash = _hash_payload(command_name, params) if idempotency_key else None
+        now = time.time()
+
         with self._lock:
             if not self._is_timer_running:
                 return {
@@ -309,12 +339,50 @@ class ExecutionQueueManager:
                     "request_id": request_id,
                 }
 
-            # Check idempotency cache
+            # 1. Check completed idempotency cache (BA-004)
             if idempotency_key and idempotency_key in self._idempotency_cache:
-                cached = dict(self._idempotency_cache[idempotency_key])
-                cached["cached_idempotent"] = True
-                return cached
+                entry = self._idempotency_cache[idempotency_key]
+                if isinstance(entry, dict) and "result" in entry:
+                    # Validate TTL and matching command/params
+                    if now - entry.get("timestamp", 0) <= self._cache_ttl_seconds:
+                        if entry.get("command") == command_name and entry.get("payload_hash") == payload_hash:
+                            cached = copy.deepcopy(entry["result"])
+                            cached["cached_idempotent"] = True
+                            if request_id:
+                                cached["request_id"] = request_id
+                            return cached
+                        else:
+                            # Mismatched command/params under the same key: invalidate stale cache
+                            del self._idempotency_cache[idempotency_key]
+                    else:
+                        # Expired entry: evict
+                        del self._idempotency_cache[idempotency_key]
+                elif isinstance(entry, dict) and "status" in entry:
+                    cached = copy.deepcopy(entry)
+                    cached["cached_idempotent"] = True
+                    if request_id:
+                        cached["request_id"] = request_id
+                    return cached
 
+            # 2. Check in-flight deduplication (BA-003)
+            in_flight_task = None
+            if idempotency_key and idempotency_key in self._in_flight_idempotency:
+                candidate = self._in_flight_idempotency[idempotency_key]
+                with candidate.lock:
+                    if candidate.command_name == command_name:
+                        in_flight_task = candidate
+
+        # If an identical task is already in flight, wait for its completion rather than executing twice!
+        if in_flight_task is not None:
+            in_flight_task.done_event.wait(timeout=timeout)
+            with in_flight_task.lock:
+                result = copy.deepcopy(in_flight_task.result_holder)
+            result["cached_idempotent"] = True
+            if request_id:
+                result["request_id"] = request_id
+            return result
+
+        # 3. Create fresh task
         task = CommandTask(
             command_name=command_name,
             params=params,
@@ -324,13 +392,28 @@ class ExecutionQueueManager:
         )
 
         with self._lock:
+            # Memory bounds on _tasks_by_id (BA-014)
+            if len(self._tasks_by_id) >= 200:
+                history_ids = {t.task_id for t in self._tasks_history}
+                to_remove = [
+                    tid for tid, t in self._tasks_by_id.items()
+                    if tid not in history_ids and t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMED_OUT)
+                ]
+                for tid in to_remove[:50]:
+                    self._tasks_by_id.pop(tid, None)
+
             self._tasks_by_id[task.task_id] = task
             self._tasks_history.append(task)
+            if idempotency_key:
+                self._in_flight_idempotency[idempotency_key] = task
 
         # Enqueue with overflow protection
         try:
             self._queue.put_nowait(task)
         except queue.Full:
+            with self._lock:
+                if idempotency_key:
+                    self._in_flight_idempotency.pop(idempotency_key, None)
             task.status = TaskStatus.FAILED
             task.result_holder["status"] = "error"
             task.result_holder["error"] = {
@@ -342,33 +425,59 @@ class ExecutionQueueManager:
             audit_logger.log(command_name, "QUEUE_FULL", "Execution queue saturated")
             return task.result_holder
 
-        # Await completion on calling HTTP worker thread
-        completed = task.done_event.wait(timeout=timeout)
+        try:
+            # Await completion on calling HTTP worker thread
+            completed = task.done_event.wait(timeout=timeout)
 
-        if not completed:
-            with task.lock:
-                task.cancel_event.set()
-                if task.status == TaskStatus.QUEUED:
+            if not completed:
+                with task.lock:
+                    task.cancel_event.set()
+                    is_queued = (task.status == TaskStatus.QUEUED)
                     task.status = TaskStatus.TIMED_OUT
                     task.result_holder["status"] = "error"
-                    task.result_holder["error"] = {
-                        "code": "EXECUTION_TIMEOUT",
-                        "message": f"Command '{command_name}' expired in queue after {timeout}s before starting.",
-                        "details": {"phase": "queued", "timeout_seconds": timeout},
-                    }
-                else:
-                    task.status = TaskStatus.TIMED_OUT
-                    task.result_holder["status"] = "error"
-                    task.result_holder["error"] = {
-                        "code": "EXECUTION_TIMEOUT",
-                        "message": f"Command '{command_name}' timed out after {timeout}s while executing.",
-                        "details": {"phase": "running", "timeout_seconds": timeout},
-                    }
-                task.result_holder["message"] = "Operation timed out."
+                    if is_queued:
+                        task.result_holder["error"] = {
+                            "code": "EXECUTION_TIMEOUT",
+                            "message": f"Command '{command_name}' expired in queue after {timeout}s before starting.",
+                            "details": {"phase": "queued", "timeout_seconds": timeout},
+                        }
+                    else:
+                        task.result_holder["error"] = {
+                            "code": "EXECUTION_TIMEOUT",
+                            "message": f"Command '{command_name}' timed out after {timeout}s while executing.",
+                            "details": {
+                                "phase": "running",
+                                "timeout_seconds": timeout,
+                                "state": "blender_operation_in_flight",
+                                "note": "Operation was in-flight on Blender's main thread and cannot be forcibly preempted asynchronously.",
+                            },
+                        }
+                    task.result_holder["message"] = "Operation timed out."
 
-            audit_logger.log(command_name, "TIMEOUT", f"Timed out after {timeout}s ({task.status.value})")
+                audit_logger.log(command_name, "TIMEOUT", f"Timed out after {timeout}s ({task.status.value})")
 
-        return task.result_holder
+            return copy.deepcopy(task.result_holder)
+
+        finally:
+            with self._lock:
+                if idempotency_key:
+                    self._in_flight_idempotency.pop(idempotency_key, None)
+                    # Cache result if successfully completed or cleanly finished
+                    if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                        # Evict oldest if cache exceeded max size
+                        if len(self._idempotency_cache) >= self._cache_max_size:
+                            oldest_key = min(
+                                self._idempotency_cache.keys(),
+                                key=lambda k: self._idempotency_cache[k].get("timestamp", 0),
+                            )
+                            self._idempotency_cache.pop(oldest_key, None)
+
+                        self._idempotency_cache[idempotency_key] = {
+                            "result": copy.deepcopy(task.result_holder),
+                            "command": command_name,
+                            "payload_hash": payload_hash,
+                            "timestamp": time.time(),
+                        }
 
 
 # Global queue manager singleton

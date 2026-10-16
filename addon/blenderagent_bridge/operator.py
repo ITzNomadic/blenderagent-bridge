@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+
 try:
     import bpy
     from bpy.types import Operator
