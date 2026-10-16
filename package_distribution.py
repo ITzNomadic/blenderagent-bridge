@@ -62,7 +62,7 @@ print(f"[+] Zip assembled: {target_zip} ({target_zip.stat().st_size:,} bytes)")
 
 # Compute final checksum of zip
 zip_hash = compute_sha256(target_zip)
-print(f"[+] SHA256 of BlenderAgentBridge-v0.2.0-Windows.zip: {zip_hash}")
+print(f"[+] SHA256 of BlenderAgentBridge-v{VERSION}-Windows.zip: {zip_hash}")
 
 print("\n[*] Verifying Zip Contents:")
 with zipfile.ZipFile(target_zip, "r") as zf:

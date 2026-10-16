@@ -1,4 +1,4 @@
-"""3D Viewport sidebar panel for BlenderAgent Bridge."""
+"""3D Viewport sidebar panel for BlenderAgent Bridge with bilingual UI support."""
 
 from __future__ import annotations
 
@@ -13,6 +13,27 @@ from .security import audit_logger
 from .server import bridge_server
 
 
+def _is_spanish() -> bool:
+    """Detect whether Blender UI or host system is configured in Spanish."""
+    if bpy is not None:
+        try:
+            loc = getattr(bpy.app.translations, "locale", "")
+            if loc.startswith("es"):
+                return True
+            elif loc.startswith("en"):
+                return False
+        except Exception:
+            pass
+    try:
+        import locale
+        loc = (locale.getlocale()[0] or "").lower()
+        if loc.startswith("es"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
     """Main Sidebar Panel for BlenderAgent Bridge status and monitoring."""
 
@@ -24,31 +45,38 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
 
     def draw(self, context):
         layout = self.layout
+        es = _is_spanish()
 
         # 1. Connection Status Banner
         is_running = bridge_server.is_running
         box_status = layout.box()
         row = box_status.row(align=True)
         if is_running:
-            row.label(text="Status: ACTIVE", icon="CHECKMARK")
+            lbl_active = "Estado: ACTIVO" if es else "Status: ACTIVE"
+            row.label(text=lbl_active, icon="CHECKMARK")
             row.label(text=f"Port: {bridge_server.port}", icon="URL")
         else:
-            row.label(text="Status: STOPPED", icon="CANCEL")
-            row.label(text="Offline", icon="ERROR")
+            lbl_stopped = "Estado: DETENIDO" if es else "Status: STOPPED"
+            lbl_offline = "Desconectado" if es else "Offline"
+            row.label(text=lbl_stopped, icon="CANCEL")
+            row.label(text=lbl_offline, icon="ERROR")
 
         # 2. Control Operators (Start / Stop)
         row_ctrl = layout.row(align=True)
         row_ctrl.scale_y = 1.3
         if not is_running:
-            row_ctrl.operator("wm.blenderagent_start_bridge", text="Start Bridge", icon="PLAY")
+            lbl_start = "Iniciar Puente" if es else "Start Bridge"
+            row_ctrl.operator("wm.blenderagent_start_bridge", text=lbl_start, icon="PLAY")
         else:
-            row_ctrl.operator("wm.blenderagent_stop_bridge", text="Stop Bridge", icon="PAUSE")
+            lbl_stop = "Detener Puente" if es else "Stop Bridge"
+            row_ctrl.operator("wm.blenderagent_stop_bridge", text=lbl_stop, icon="PAUSE")
 
         # 3. Activity & Metrics
         layout.separator()
         box_activity = layout.box()
         header_row = box_activity.row()
-        header_row.label(text=f"Processed: {audit_logger.total_count} commands", icon="CONSOLE")
+        lbl_proc = f"Procesados: {audit_logger.total_count} comandos" if es else f"Processed: {audit_logger.total_count} commands"
+        header_row.label(text=lbl_proc, icon="CONSOLE")
         header_row.operator("wm.blenderagent_clear_log", text="", icon="TRASH")
 
         # 4. Compact Operational Log
@@ -61,13 +89,14 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
                 row_entry.label(text=f"{entry['time']} [{entry['command']}]", icon=icon)
                 row_entry.label(text=entry["summary"][:24])
         else:
-            box_activity.label(text="No recent operations", icon="INFO")
+            lbl_no_ops = "Sin operaciones recientes" if es else "No recent operations"
+            box_activity.label(text=lbl_no_ops, icon="INFO")
 
 
 class VIEW3D_PT_BlenderAgentBridgeAdvancedPanel(Panel):
     """Collapsible Advanced Settings subpanel kept closed during normal usage."""
 
-    bl_label = "Advanced Settings"
+    bl_label = "Ajustes Avanzados" if _is_spanish() else "Advanced Settings"
     bl_idname = "VIEW3D_PT_blenderagent_bridge_advanced"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -80,14 +109,18 @@ class VIEW3D_PT_BlenderAgentBridgeAdvancedPanel(Panel):
         wm = context.window_manager
         scene = context.scene
         props_target = wm if hasattr(wm, "blenderagent_port") else scene
+        es = _is_spanish()
 
         col = layout.column(align=True)
-        col.prop(props_target, "blenderagent_port", text="Port")
-        col.prop(props_target, "blenderagent_workspace_dir", text="Workspace")
+        lbl_port = "Puerto" if es else "Port"
+        lbl_ws = "Espacio de trabajo" if es else "Workspace"
+        col.prop(props_target, "blenderagent_port", text=lbl_port)
+        col.prop(props_target, "blenderagent_workspace_dir", text=lbl_ws)
 
         layout.separator()
         row = layout.row()
-        row.operator("wm.blenderagent_regenerate_token", text="Reset Credential", icon="FILE_REFRESH")
+        lbl_reset = "Restablecer Credencial" if es else "Reset Credential"
+        row.operator("wm.blenderagent_regenerate_token", text=lbl_reset, icon="FILE_REFRESH")
 
 
 PANEL_CLASSES = [

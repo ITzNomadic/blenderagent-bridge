@@ -32,6 +32,7 @@ try:
     )
     from installer.detector import BlenderInstallation, SystemDetectionResult, detect_system_state
     from installer.orchestrator import InstallationOrchestrator, InstallOptions, StepProgress
+    from installer.i18n import detect_system_language, get_text
 except ImportError:
     from .constants import (
         APP_NAME,
@@ -41,6 +42,7 @@ except ImportError:
     )
     from .detector import BlenderInstallation, SystemDetectionResult, detect_system_state
     from .orchestrator import InstallationOrchestrator, InstallOptions, StepProgress
+    from .i18n import detect_system_language, get_text
 
 
 # Enable High-DPI awareness on Windows 10/11
@@ -75,9 +77,12 @@ class InstallerGUI:
 
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title(f"{APP_NAME} v{VERSION} — Installer & AI Setup")
-        self.root.geometry("760x620")
-        self.root.minsize(720, 560)
+        self.lang = detect_system_language()
+        self.active_screen = "welcome"
+
+        self.root.title(self.t("app_title", app_name=APP_NAME, version=VERSION))
+        self.root.geometry("780x640")
+        self.root.minsize(740, 580)
         self.root.configure(bg=ModernTheme.BG)
 
         self.detection: SystemDetectionResult = detect_system_state()
@@ -100,33 +105,88 @@ class InstallerGUI:
         # Build initial screen
         self.show_screen_welcome()
 
+    def t(self, key: str, **kwargs) -> str:
+        """Helper to get translated string for current active language."""
+        return get_text(key, self.lang, **kwargs)
+
+    def toggle_language(self):
+        """Toggle UI between English and Spanish and re-render current screen."""
+        self.lang = "es" if self.lang == "en" else "en"
+        self.root.title(self.t("app_title", app_name=APP_NAME, version=VERSION))
+        if self.active_screen == "welcome":
+            self.show_screen_welcome()
+        elif self.active_screen == "review":
+            self.show_screen_review()
+        elif self.active_screen == "dashboard":
+            self.show_screen_dashboard()
+
     def clear_screen(self):
         if self.current_frame:
             self.current_frame.destroy()
             self.current_frame = None
 
+    def _render_top_header(self, parent: tk.Frame, title_text: str = APP_NAME, show_badge: bool = True):
+        """Standardized top bar with title, Beta/Experimental badge, and Language toggle."""
+        top_bar = tk.Frame(parent, bg=ModernTheme.BG)
+        top_bar.pack(fill="x", pady=(0, 4))
+
+        title_frame = tk.Frame(top_bar, bg=ModernTheme.BG)
+        title_frame.pack(side="left", anchor="w")
+
+        header = tk.Label(
+            title_frame,
+            text=title_text,
+            font=("Segoe UI", 18, "bold"),
+            fg=ModernTheme.TEXT_MAIN,
+            bg=ModernTheme.BG,
+        )
+        header.pack(side="left")
+
+        if show_badge:
+            beta_badge = tk.Label(
+                title_frame,
+                text=f" {self.t('beta_badge')} ",
+                font=("Segoe UI", 8, "bold"),
+                fg=ModernTheme.WARNING,
+                bg=ModernTheme.SURFACE,
+                bd=1,
+                relief="solid",
+            )
+            beta_badge.pack(side="left", padx=(10, 0), pady=(4, 0))
+
+        lang_label = "🌐 Language: English" if self.lang == "en" else "🌐 Idioma: Español"
+        lang_btn = tk.Button(
+            top_bar,
+            text=lang_label,
+            font=("Segoe UI", 9),
+            fg=ModernTheme.TEXT_MAIN,
+            bg=ModernTheme.SURFACE,
+            activebackground=ModernTheme.SURFACE_HOVER,
+            activeforeground=ModernTheme.TEXT_MAIN,
+            bd=1,
+            padx=10,
+            pady=3,
+            cursor="hand2",
+            command=self.toggle_language,
+        )
+        lang_btn.pack(side="right", anchor="e")
+
     # =========================================================================
     # SCREEN A: WELCOME / DETECT
     # =========================================================================
     def show_screen_welcome(self):
+        self.active_screen = "welcome"
         self.clear_screen()
         frame = tk.Frame(self.container, bg=ModernTheme.BG)
         frame.pack(fill="both", expand=True)
         self.current_frame = frame
 
-        # Header
-        header = tk.Label(
-            frame,
-            text=APP_NAME,
-            font=("Segoe UI", 20, "bold"),
-            fg=ModernTheme.TEXT_MAIN,
-            bg=ModernTheme.BG,
-        )
-        header.pack(anchor="w")
+        # Header with Beta badge and Language switch
+        self._render_top_header(frame, title_text=APP_NAME, show_badge=True)
 
         sub = tk.Label(
             frame,
-            text="Connect Blender to your AI assistants (Google Antigravity & OpenAI Codex)",
+            text=self.t("subtitle"),
             font=("Segoe UI", 10),
             fg=ModernTheme.TEXT_MUTED,
             bg=ModernTheme.BG,
@@ -136,7 +196,7 @@ class InstallerGUI:
         # 1. Blender Card
         b_card = tk.LabelFrame(
             frame,
-            text="  3D Environment (Blender)  ",
+            text=self.t("blender_card_title"),
             font=("Segoe UI", 10, "bold"),
             fg=ModernTheme.TEXT_MAIN,
             bg=ModernTheme.SURFACE,
@@ -146,10 +206,10 @@ class InstallerGUI:
         b_card.pack(fill="x", pady=8, ipady=8, padx=2)
 
         if self.detection.blender_installations:
-            b_text = f"Detected: {self.detection.recommended_blender.display_name}"
+            b_text = self.t("blender_detected", display_name=self.detection.recommended_blender.display_name)
             b_color = ModernTheme.SUCCESS
         else:
-            b_text = "No compatible Blender installation found (Requires Blender 4.2+ or 5.2)."
+            b_text = self.t("blender_not_found")
             b_color = ModernTheme.ERROR
 
         b_lbl = tk.Label(
@@ -166,7 +226,7 @@ class InstallerGUI:
         # 2. AI Clients Card
         ai_card = tk.LabelFrame(
             frame,
-            text="  AI Clients Integration  ",
+            text=self.t("ai_card_title"),
             font=("Segoe UI", 10, "bold"),
             fg=ModernTheme.TEXT_MAIN,
             bg=ModernTheme.SURFACE,
@@ -176,12 +236,12 @@ class InstallerGUI:
         ai_card.pack(fill="x", pady=8, ipady=8, padx=2)
 
         # Antigravity Checkbox
-        ag_status = "Detected" if self.detection.antigravity.installed else "Not detected"
+        ag_status = self.t("status_detected") if self.detection.antigravity.installed else self.t("status_not_detected")
         if self.detection.antigravity.is_configured:
-            ag_status += " (Configured)"
+            ag_status += self.t("status_configured")
         ag_cb = tk.Checkbutton(
             ai_card,
-            text=f"Google Antigravity — [{ag_status}]",
+            text=self.t("antigravity_label", status=ag_status),
             variable=self.var_antigravity,
             font=("Segoe UI", 9),
             fg=ModernTheme.TEXT_MAIN,
@@ -193,12 +253,12 @@ class InstallerGUI:
         ag_cb.pack(anchor="w", padx=16, pady=2)
 
         # Codex Checkbox
-        codex_status = "Detected" if self.detection.codex.installed else "Not detected"
+        codex_status = self.t("status_detected") if self.detection.codex.installed else self.t("status_not_detected")
         if self.detection.codex.is_configured:
-            codex_status += " (Configured)"
+            codex_status += self.t("status_configured")
         codex_cb = tk.Checkbutton(
             ai_card,
-            text=f"OpenAI Codex (CLI / IDE) — [{codex_status}]",
+            text=self.t("codex_label", status=codex_status),
             variable=self.var_codex,
             font=("Segoe UI", 9),
             fg=ModernTheme.TEXT_MAIN,
@@ -212,7 +272,7 @@ class InstallerGUI:
         # Advanced Settings Accordion / Button
         adv_btn = tk.Button(
             frame,
-            text="⚙ Advanced Settings (Workspace & Ports)",
+            text=self.t("adv_settings_btn"),
             font=("Segoe UI", 9),
             fg=ModernTheme.TEXT_MUTED,
             bg=ModernTheme.BG,
@@ -232,7 +292,7 @@ class InstallerGUI:
 
         btn_install = tk.Button(
             btn_bar,
-            text="Install & Connect  ➔",
+            text=self.t("btn_install"),
             font=("Segoe UI", 11, "bold"),
             bg=ModernTheme.PRIMARY,
             fg="#ffffff",
@@ -248,7 +308,7 @@ class InstallerGUI:
 
         btn_repair = tk.Button(
             btn_bar,
-            text="Repair Existing Setup",
+            text=self.t("btn_repair"),
             font=("Segoe UI", 9),
             bg=ModernTheme.SURFACE,
             fg=ModernTheme.TEXT_MAIN,
@@ -261,48 +321,42 @@ class InstallerGUI:
 
     def _toggle_advanced_settings(self):
         win = tk.Toplevel(self.root)
-        win.title("Advanced Settings")
+        win.title(self.t("adv_settings_title"))
         win.geometry("520x280")
         win.configure(bg=ModernTheme.BG)
         win.transient(self.root)
         win.grab_set()
 
-        lbl = tk.Label(win, text="Custom Workspace Directory:", fg=ModernTheme.TEXT_MAIN, bg=ModernTheme.BG)
+        lbl = tk.Label(win, text=self.t("custom_workspace_lbl"), fg=ModernTheme.TEXT_MAIN, bg=ModernTheme.BG)
         lbl.pack(anchor="w", padx=20, pady=(20, 4))
 
         ent = tk.Entry(win, textvariable=self.var_workspace, width=50)
         ent.pack(anchor="w", padx=20)
 
-        p_lbl = tk.Label(win, text="Local Bridge Port (Default 9876):", fg=ModernTheme.TEXT_MAIN, bg=ModernTheme.BG)
+        p_lbl = tk.Label(win, text=self.t("port_lbl"), fg=ModernTheme.TEXT_MAIN, bg=ModernTheme.BG)
         p_lbl.pack(anchor="w", padx=20, pady=(16, 4))
 
         p_ent = tk.Entry(win, textvariable=self.var_port, width=15)
         p_ent.pack(anchor="w", padx=20)
 
-        ok_btn = tk.Button(win, text="Save Settings", bg=ModernTheme.PRIMARY, fg="#fff", command=win.destroy)
+        ok_btn = tk.Button(win, text=self.t("btn_save_settings"), bg=ModernTheme.PRIMARY, fg="#fff", command=win.destroy)
         ok_btn.pack(side="bottom", pady=20)
 
     # =========================================================================
     # SCREEN B: CONSENT / REVIEW
     # =========================================================================
     def show_screen_review(self):
+        self.active_screen = "review"
         self.clear_screen()
         frame = tk.Frame(self.container, bg=ModernTheme.BG)
         frame.pack(fill="both", expand=True)
         self.current_frame = frame
 
-        title = tk.Label(
-            frame,
-            text="Review Installation Changes",
-            font=("Segoe UI", 16, "bold"),
-            fg=ModernTheme.TEXT_MAIN,
-            bg=ModernTheme.BG,
-        )
-        title.pack(anchor="w", pady=(0, 8))
+        self._render_top_header(frame, title_text=self.t("review_title"), show_badge=False)
 
         desc = tk.Label(
             frame,
-            text="The installer will execute the following verified modifications on your system:",
+            text=self.t("review_summary"),
             font=("Segoe UI", 9),
             fg=ModernTheme.TEXT_MUTED,
             bg=ModernTheme.BG,
@@ -312,20 +366,21 @@ class InstallerGUI:
         box = tk.Text(frame, height=12, bg=ModernTheme.SURFACE, fg=ModernTheme.TEXT_MAIN, bd=1, padx=12, pady=12)
         box.pack(fill="both", expand=True)
 
+        target_name = self.detection.recommended_blender.display_name if self.detection.recommended_blender else "None"
         summary_lines = [
-            f"1. Target Blender: {self.detection.recommended_blender.display_name if self.detection.recommended_blender else 'None'}",
-            f"2. Addon: Install 'blenderagent_bridge' extension into user profile extensions repository.",
-            f"3. Standalone MCP Launcher: Place binary into AppData\\Local\\Programs\\BlenderAgentBridge\\bin",
-            f"4. Workspace: Use writable directory at '{self.var_workspace.get()}' (no Program Files access).",
-            f"5. Security: Generate ephemeral Bearer token secured with Windows DPAPI and private ACLs.",
+            self.t("review_item_blender", name=target_name),
+            self.t("review_item_addon"),
+            self.t("review_item_mcp"),
+            self.t("review_item_workspace", path=self.var_workspace.get()),
+            self.t("review_item_security"),
         ]
         if self.var_antigravity.get():
-            summary_lines.append("6. Google Antigravity: Register 'blenderagent-bridge' in ~/.gemini/config/mcp_config.json.")
+            summary_lines.append(self.t("review_item_ag"))
         if self.var_codex.get():
-            summary_lines.append("7. OpenAI Codex: Register [mcp_servers.blenderagent-bridge] in ~/.codex/config.toml.")
+            summary_lines.append(self.t("review_item_codex"))
 
         if self.detection.recommended_blender and self.detection.recommended_blender.is_running:
-            summary_lines.append("\n⚠ Note: Blender is currently running. The extension will install safely into your user profile without interrupting unsaved projects.")
+            summary_lines.append(self.t("review_blender_running"))
 
         box.insert("1.0", "\n".join(summary_lines))
         box.configure(state="disabled")
@@ -336,7 +391,7 @@ class InstallerGUI:
 
         btn_confirm = tk.Button(
             btn_bar,
-            text="Confirm & Apply  ➔",
+            text=self.t("btn_confirm"),
             font=("Segoe UI", 10, "bold"),
             bg=ModernTheme.PRIMARY,
             fg="#ffffff",
@@ -349,7 +404,7 @@ class InstallerGUI:
 
         btn_back = tk.Button(
             btn_bar,
-            text="Back",
+            text=self.t("btn_back"),
             font=("Segoe UI", 9),
             bg=ModernTheme.SURFACE,
             fg=ModernTheme.TEXT_MAIN,
@@ -364,6 +419,7 @@ class InstallerGUI:
     # SCREEN C: PROGRESS
     # =========================================================================
     def show_screen_progress(self):
+        self.active_screen = "progress"
         self.clear_screen()
         frame = tk.Frame(self.container, bg=ModernTheme.BG)
         frame.pack(fill="both", expand=True)
@@ -371,7 +427,7 @@ class InstallerGUI:
 
         title = tk.Label(
             frame,
-            text="Installing BlenderAgent Bridge...",
+            text=self.t("progress_title"),
             font=("Segoe UI", 16, "bold"),
             fg=ModernTheme.TEXT_MAIN,
             bg=ModernTheme.BG,
@@ -384,14 +440,14 @@ class InstallerGUI:
 
         self.step_labels = {}
         step_names = [
-            ("verify_package", "Verify installation packages"),
-            ("stage_directories", "Stage user workspace and directories"),
-            ("install_runtime", "Provision standalone MCP runtime"),
-            ("install_addon", "Install Blender extension"),
-            ("register_antigravity", "Configure Google Antigravity"),
-            ("register_codex", "Configure OpenAI Codex"),
-            ("init_session", "Initialize secure cryptographic session"),
-            ("verify_mcp", "Verify MCP registration integrity"),
+            ("verify_package", self.t("step_verify_package")),
+            ("stage_directories", self.t("step_stage_directories")),
+            ("install_runtime", self.t("step_install_runtime")),
+            ("install_addon", self.t("step_install_addon")),
+            ("register_antigravity", self.t("step_register_antigravity")),
+            ("register_codex", self.t("step_register_codex")),
+            ("init_session", self.t("step_init_session")),
+            ("verify_mcp", self.t("step_verify_mcp")),
         ]
 
         for code, label in step_names:
@@ -440,11 +496,11 @@ class InstallerGUI:
         if steps:
             for s in steps:
                 if s.status == "failed":
-                    detail = f"\n\nPaso fallido: {s.name}\nDetalle: {s.message}"
+                    detail = f"\n\nStep: {s.name}\nDetail: {s.message}"
                     break
         messagebox.showerror(
-            "Installation Error",
-            f"Installation did not complete successfully.{detail}\n\nRevisa el registro en:\n%LOCALAPPDATA%\\BlenderAgentBridge\\installer.log",
+            self.t("install_failed_title"),
+            self.t("install_failed_msg", detail=detail),
         )
         self.show_screen_welcome()
 
@@ -452,23 +508,17 @@ class InstallerGUI:
     # SCREEN D: CONNECTED / DASHBOARD
     # =========================================================================
     def show_screen_dashboard(self):
+        self.active_screen = "dashboard"
         self.clear_screen()
         frame = tk.Frame(self.container, bg=ModernTheme.BG)
         frame.pack(fill="both", expand=True)
         self.current_frame = frame
 
-        header = tk.Label(
-            frame,
-            text="✔ Ready to Use!",
-            font=("Segoe UI", 18, "bold"),
-            fg=ModernTheme.SUCCESS,
-            bg=ModernTheme.BG,
-        )
-        header.pack(anchor="w", pady=(0, 4))
+        self._render_top_header(frame, title_text=self.t("dashboard_title"), show_badge=True)
 
         sub = tk.Label(
             frame,
-            text="BlenderAgent Bridge is successfully installed and integrated with your AI clients.",
+            text=self.t("dashboard_sub"),
             font=("Segoe UI", 9),
             fg=ModernTheme.TEXT_MUTED,
             bg=ModernTheme.BG,
@@ -478,7 +528,7 @@ class InstallerGUI:
         # Component health list
         card = tk.LabelFrame(
             frame,
-            text="  Component Status  ",
+            text=self.t("comp_status_title"),
             font=("Segoe UI", 10, "bold"),
             fg=ModernTheme.TEXT_MAIN,
             bg=ModernTheme.SURFACE,
@@ -488,10 +538,10 @@ class InstallerGUI:
         card.pack(fill="x", pady=4, ipady=8, padx=2)
 
         items = [
-            ("✔ Blender Extension:", "Installed and active in user repository"),
-            ("✔ MCP Server:", "Registered and verified in client configuration"),
-            ("✔ Secure Session:", "Token protected with Windows DPAPI and private ACLs"),
-            ("✔ Workspace:", str(self.var_workspace.get())),
+            (self.t("comp_addon_title"), self.t("comp_addon_desc")),
+            (self.t("comp_mcp_title"), self.t("comp_mcp_desc")),
+            (self.t("comp_sec_title"), self.t("comp_sec_desc")),
+            (self.t("comp_ws_title"), f" {str(self.var_workspace.get())}"),
         ]
         for title, val in items:
             r = tk.Frame(card, bg=ModernTheme.SURFACE)
@@ -500,7 +550,7 @@ class InstallerGUI:
             tk.Label(r, text=f" {val}", font=("Segoe UI", 9), fg=ModernTheme.TEXT_MAIN, bg=ModernTheme.SURFACE).pack(side="left")
 
         # Example prompt
-        p_frame = tk.LabelFrame(frame, text="  Try this prompt in Antigravity or Codex  ", bg=ModernTheme.SURFACE, fg=ModernTheme.TEXT_MAIN)
+        p_frame = tk.LabelFrame(frame, text=self.t("prompt_card_title"), bg=ModernTheme.SURFACE, fg=ModernTheme.TEXT_MAIN)
         p_frame.pack(fill="x", pady=12, ipady=8, padx=2)
 
         prompt_text = "Create a blue metallic cube named 'TestCube' in Blender at [2, 0, 1] using BlenderAgent Bridge."
@@ -511,9 +561,9 @@ class InstallerGUI:
         def copy_prompt():
             self.root.clipboard_clear()
             self.root.clipboard_append(prompt_text)
-            messagebox.showinfo("Copied", "Example prompt copied to clipboard!")
+            messagebox.showinfo(self.t("copied_title"), self.t("copied_msg"))
 
-        cp_btn = tk.Button(p_frame, text="Copy", bg=ModernTheme.PRIMARY, fg="#fff", command=copy_prompt)
+        cp_btn = tk.Button(p_frame, text=self.t("btn_copy"), bg=ModernTheme.PRIMARY, fg="#fff", command=copy_prompt)
         cp_btn.pack(side="right", padx=12)
 
         # Action Buttons Bar
@@ -522,7 +572,7 @@ class InstallerGUI:
 
         btn_test = tk.Button(
             act_bar,
-            text="Test Connection",
+            text=self.t("btn_test"),
             font=("Segoe UI", 10, "bold"),
             bg=ModernTheme.SUCCESS,
             fg="#ffffff",
@@ -535,7 +585,7 @@ class InstallerGUI:
 
         btn_repair = tk.Button(
             act_bar,
-            text="Repair",
+            text=self.t("btn_repair"),
             font=("Segoe UI", 9),
             bg=ModernTheme.SURFACE,
             fg=ModernTheme.TEXT_MAIN,
@@ -548,7 +598,7 @@ class InstallerGUI:
 
         btn_uninst = tk.Button(
             act_bar,
-            text="Uninstall",
+            text=self.t("btn_uninst"),
             font=("Segoe UI", 9),
             bg=ModernTheme.SURFACE,
             fg=ModernTheme.ERROR,
@@ -586,14 +636,12 @@ class InstallerGUI:
                 res = client.get(f"http://127.0.0.1:{port}/api/v1/health")
                 if res.status_code == 200:
                     health_info = res.json()
-                    version = health_info.get("version", "0.2.2")
+                    version = health_info.get("version", VERSION)
 
                     if not token:
                         messagebox.showwarning(
-                            "Connection Test",
-                            f"HTTP server is reachable at http://127.0.0.1:{port} (v{version}), "
-                            f"but no session token was found on disk.\n\n"
-                            f"Restart Blender or check that BlenderAgent Bridge extension is enabled.",
+                            self.t("conn_test_title"),
+                            self.t("conn_test_no_token", port=port, version=version),
                         )
                         return
 
@@ -611,71 +659,68 @@ class InstallerGUI:
                             active_obj = scene_data.get("active_object") or "None"
                             obj_count = len(scene_data.get("objects", []))
                             messagebox.showinfo(
-                                "Connection Test",
-                                f"✔ Bridge ACTIVE & FULLY AUTHENTICATED!\n\n"
-                                f"• URL: http://127.0.0.1:{port}\n"
-                                f"• Version: v{version}\n"
-                                f"• Active Object: {active_obj}\n"
-                                f"• Scene Objects: {obj_count}\n\n"
-                                f"MCP tools are fully operational for AI agents.",
+                                self.t("conn_test_title"),
+                                self.t(
+                                    "conn_test_success",
+                                    port=port,
+                                    version=version,
+                                    active_obj=active_obj,
+                                    obj_count=obj_count,
+                                ),
                             )
                             return
                         else:
                             err_msg = payload.get("error", {}).get("message", "Unknown error")
                             messagebox.showerror(
-                                "Connection Test",
+                                self.t("conn_test_title"),
                                 f"Bridge reachable, but command execution returned error:\n{err_msg}",
                             )
                             return
                     elif auth_res.status_code in (401, 403):
                         messagebox.showerror(
-                            "Connection Test",
-                            f"HTTP server is reachable on port {port}, but AUTHENTICATION REJECTED (HTTP {auth_res.status_code}).\n\n"
-                            f"The stored session token does not match the running Blender instance.\n"
-                            f"Restart Blender to re-synchronize session credentials.",
+                            self.t("conn_test_title"),
+                            self.t("conn_test_rejected", port=port, code=auth_res.status_code),
                         )
                         return
                     else:
                         messagebox.showerror(
-                            "Connection Test",
+                            self.t("conn_test_title"),
                             f"Bridge server reachable, but returned unexpected HTTP {auth_res.status_code} during test command.",
                         )
                         return
         except httpx.ConnectError:
             messagebox.showwarning(
-                "Connection Test",
-                f"Bridge server is not currently listening on port {port}.\n\n"
-                f"Open Blender to start the bridge automatically.",
+                self.t("conn_test_title"),
+                self.t("conn_test_offline", port=port),
             )
             return
         except Exception as err:
             messagebox.showwarning(
-                "Connection Test",
+                self.t("conn_test_title"),
                 f"Could not connect to Bridge on port {port}: {err}\n\n"
                 f"Open Blender to start the bridge automatically.",
             )
             return
 
         messagebox.showwarning(
-            "Connection Test",
-            f"Bridge server is not currently listening on port {port}.\n\n"
-            f"Open Blender to start the bridge automatically.",
+            self.t("conn_test_title"),
+            self.t("conn_test_offline", port=port),
         )
 
     def trigger_repair(self):
-        confirm = messagebox.askyesno("Repair", "Do you want to re-verify and repair all registrations and files?")
+        confirm = messagebox.askyesno(self.t("repair_confirm_title"), self.t("repair_confirm_msg"))
         if confirm:
             self.show_screen_progress()
 
     def trigger_uninstall(self):
         confirm = messagebox.askyesno(
-            "Confirm Uninstall",
-            "This will remove the extension and AI client registrations.\nYour projects and renders will NOT be deleted. Proceed?",
+            self.t("uninst_confirm_title"),
+            self.t("uninst_confirm_msg"),
         )
         if confirm:
             orch = InstallationOrchestrator()
             success, logs = orch.uninstall(keep_workspace=True)
-            messagebox.showinfo("Uninstalled", "\n".join(logs))
+            messagebox.showinfo(self.t("uninst_done_title"), "\n".join(logs))
             self.show_screen_welcome()
 
 

@@ -435,7 +435,7 @@ def test_v21_001_gui_test_connection_diagnostics(monkeypatch):
             gui.run_test_connection()
 
         assert len(reported_errors) == 1
-        assert "AUTHENTICATION REJECTED" in reported_errors[0]
+        assert "AUTHENTICATION REJECTED" in reported_errors[0] or "RECHAZADA" in reported_errors[0]
     finally:
         root.destroy()
 
@@ -553,5 +553,34 @@ def test_v21_006_orchestrator_checksum_verification_detects_tampering():
                 assert success is False
                 assert steps[0].status == "failed"
                 assert "Checksum mismatch" in steps[0].message
+
+
+def test_v21_008_i18n_language_detection_and_translation(monkeypatch):
+    """V21-008: Verify language detection, English/Spanish fallbacks, and parameter interpolation."""
+    import sys
+    from unittest.mock import MagicMock
+    from installer.i18n import detect_system_language, get_text, TRANSLATIONS
+
+    # 1. Test translation lookup
+    en_app = get_text("app_title", "en", app_name="BlenderAgent Bridge", version="0.2.2")
+    es_app = get_text("app_title", "es", app_name="BlenderAgent Bridge", version="0.2.2")
+    assert "Installer & AI Setup" in en_app
+    assert "Instalador y Configuración IA" in es_app
+
+    # 2. Test fallback for unknown key returns the key itself
+    unknown = get_text("non_existent_key_xyz", "en")
+    assert unknown == "non_existent_key_xyz"
+
+    # 3. Test mock Windows LANGID 0x09 (English)
+    if sys.platform == "win32":
+        import ctypes
+        mock_kernel32 = MagicMock()
+        mock_kernel32.GetUserDefaultUILanguage.return_value = 0x0409  # en-US
+        monkeypatch.setattr(ctypes.windll, "kernel32", mock_kernel32)
+        assert detect_system_language() == "en"
+
+        mock_kernel32.GetUserDefaultUILanguage.return_value = 0x0C0A  # es-ES
+        assert detect_system_language() == "es"
+
 
 

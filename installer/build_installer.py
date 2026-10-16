@@ -105,6 +105,7 @@ def build_all():
         "--hidden-import=installer.detector",
         "--hidden-import=installer.orchestrator",
         "--hidden-import=installer.gui",
+        "--hidden-import=installer.i18n",
         "--hidden-import=installer.addon_manager",
         "--hidden-import=installer.security_manager",
         "--hidden-import=installer.adapters",

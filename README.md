@@ -4,22 +4,21 @@
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](pyproject.toml)
 [![Blender: 4.2+ / 4.5 LTS / 5.2 LTS](https://img.shields.io/badge/Blender-4.2%2B%20%7C%204.5%20LTS%20%7C%205.2%20LTS-orange.svg)](https://www.blender.org/)
 [![Model Context Protocol](https://img.shields.io/badge/MCP-Official%20SDK-purple.svg)](https://modelcontextprotocol.io/)
+[![Release: Beta / Experimental](https://img.shields.io/badge/Release-v0.2.2--beta%20(Experimental)-yellow.svg)](https://github.com/ITzNomadic/blenderagent-bridge/releases)
 
-**BlenderAgent Bridge** (`v0.2.0`) is an open-source framework enabling autonomous AI agents (such as Google Antigravity, OpenAI Codex, Claude Desktop, Cursor, or autonomous pipelines) to inspect, model, shade, illuminate, render, and control Blender through structured, deterministic, and verifiable **Model Context Protocol (MCP)** tools.
+**BlenderAgent Bridge** (`v0.2.2-beta`) is an open-source framework enabling autonomous AI agents (such as Google Antigravity, OpenAI Codex, Claude Desktop, Cursor, or autonomous agent loops) to inspect, model, shade, illuminate, render, and control Blender through structured, deterministic, and verifiable **Model Context Protocol (MCP)** tools.
 
-### New in v0.2.0:
-- **One-Click Windows Installer (`BlenderAgentBridge-Setup.exe`)**: Zero-command, standalone installer with modern wizard GUI.
-- **Standalone MCP Launcher (`blenderagent-mcp.exe`)**: Built-in runtime requiring NO global Python installation.
-- **Automatic Multi-Client Integration**: Automatic discovery and registration for Google Antigravity and OpenAI Codex with backup preservation.
-- **DPAPI Credential Security**: Ephemeral Bearer tokens encrypted using Windows DPAPI and private filesystem ACLs.
-- **Safe Non-Admin Workspace**: Authoritative user workspace at `%LOCALAPPDATA%\BlenderAgentBridge\workspace`.
+> **Note:** This release is tagged as **Beta / Experimental**. It provides comprehensive automation and stability fixes, but ongoing refinements and community feedback are actively welcomed.
 
-Unlike conversational chatbots or insecure remote execution bridges (`eval`/`exec`), BlenderAgent Bridge enforces:
-- **Thread Safety**: All Blender scene mutations execute strictly on Blender's main thread via `bpy.app.timers`.
-- **Zero In-Blender Dependencies**: The Blender Add-on utilizes solely Python's standard library (`http.server`, `threading`, `queue`, `json`, `pathlib`, `secrets`).
-- **Sandboxed File Operations**: All file reading and writing (`render_preview`, `capture_viewport`, `save_project`) is confined strictly to an authoritative workspace directory with rigorous path traversal defenses (guarding against `..`, Windows ADS `:`, reserved devices like `CON`/`NUL`, and shared prefixes).
-- **Hardened Local HTTP Security**: Binds exclusively to `127.0.0.1`, validates `Host` headers against DNS rebinding, checks `Origin` against CSRF, and enforces constant-time Bearer token verification.
-- **Task State Machine & Expiration Protection**: Full lifecycle tracking (`QUEUED`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCEL_REQUESTED`, `CANCELLED`, `TIMED_OUT`, `INTERRUPTED`), timeout defenses that abort expired queued tasks before execution, cooperative cancellation, and idempotency caching.
+---
+
+### Highlights in v0.2.2-beta:
+- **Automatic System Language Detection (i18n)**: Automatically detects whether your operating system is in English or Spanish and displays the interface in that language, with an instant header toggle button (`🌐 Language / Idioma`).
+- **Fully Automated Token Synchronization**: Zero manual token configuration. Tokens are cryptographically generated, written to user-private files with ACLs, and automatically synchronized between Blender and the MCP server.
+- **Cleaned-up UI**: The 3D Viewport sidebar panel is streamlined and clutter-free (tokens and credentials remain safely managed internally).
+- **One-Click Windows Installer (`BlenderAgentBridge-Setup.exe`)**: Standalone graphical installer that discovers Blender, registers Google Antigravity and OpenAI Codex, and provisions the MCP binary without needing global Python.
+- **Standalone MCP Launcher (`blenderagent-mcp.exe`)**: Embedded self-contained runtime.
+- **Hardened Security & Concurrency**: 86 automated test cases covering DNS rebinding, CSRF defenses, Windows ADS path traversal, in-flight idempotency deduplication, and atomic NTFS file operations.
 
 ---
 
@@ -28,14 +27,14 @@ Unlike conversational chatbots or insecure remote execution bridges (`eval`/`exe
 ```
 +-------------------------------------------------------------------------+
 |                              AI AGENT                                   |
-|   (Antigravity / Claude Desktop / Cursor / Custom Agent Script)        |
+|   (Antigravity / OpenAI Codex / Claude Desktop / Cursor / Script)       |
 +-------------------------------------------------------------------------+
                                     |
                            MCP Protocol (stdio)
                                     v
 +-------------------------------------------------------------------------+
 |                         MCP SERVER COMPONENT                            |
-|             (Independent Python Process, official MCP SDK)             |
+|             (Standalone executable or Python process, MCP SDK)         |
 |                                                                         |
 |  * Exposes official MCP tools (FastMCP / MCPServer)                     |
 |  * Validates parameters using Pydantic schemas (finite float guards)    |
@@ -63,7 +62,7 @@ Unlike conversational chatbots or insecure remote execution bridges (`eval`/`exe
 |  [3D Viewport UI Panel]                                                 |
 |    - Status indicator (ACTIVE / STOPPED)                                |
 |    - Start / Stop Bridge operators                                      |
-|    - Dynamic Port & Transient WindowManager Auth Token                  |
+|    - Bilingual support (English / Spanish)                              |
 |    - Command counter & compact operational audit log                    |
 +-------------------------------------------------------------------------+
 ```
@@ -89,48 +88,33 @@ BlenderAgent Bridge exposes 10 standardized, typed tools:
 
 ---
 
-## Installation & Quickstart
+## Quickstart (Windows)
 
-### Prerequisites
-- Blender 4.2+, 4.5 LTS, or 5.2 LTS.
-- Python 3.10+ (for the MCP server host environment).
+### Option 1: One-Click Installer (Recommended)
+1. Download `BlenderAgentBridge-Setup.exe` from the latest [Release](https://github.com/ITzNomadic/blenderagent-bridge/releases).
+2. Run `BlenderAgentBridge-Setup.exe`.
+3. The wizard detects your Blender version, Google Antigravity, and OpenAI Codex configurations automatically.
+4. Click **Install & Connect**. Open Blender, and you're ready!
 
-### 1. Set Up MCP Server Environment
+### Option 2: Manual / Developer Setup
 ```bash
 git clone https://github.com/ITzNomadic/blenderagent-bridge.git
 cd blenderagent-bridge
 
 # Create and activate virtual environment
 python -m venv .venv
-# On Windows:
 .\.venv\Scripts\activate
-# On Linux/macOS:
-source .venv/bin/activate
 
-# Install package and entrypoint
+# Install dependencies and bridge in editable mode
 pip install -e .
 ```
-
-After installation, the CLI command `blenderagent-mcp` is directly available:
-```bash
-blenderagent-mcp --help
-```
-
-### 2. Install the Blender Add-on
-1. Open Blender 5.2 or 4.5 LTS.
-2. Go to **Edit > Preferences > Add-ons**.
-3. Click the dropdown menu at the top right and select **Install from Disk...**.
-4. Select the `addon/blenderagent_bridge` directory (or zip archive).
-5. Enable **BlenderAgent Bridge**.
-6. In the 3D Viewport, press `N` to open the sidebar and navigate to the **BlenderAgent** tab.
-7. Click **Start Bridge**. The status banner will change to `Status: ACTIVE` with the port and token displayed.
 
 ---
 
 ## AI Agent Integration
 
-### Antigravity Integration
-Add the server entry to `~/.gemini/config/mcp_config.json`:
+### Google Antigravity Integration
+In `~/.gemini/config/mcp_config.json`:
 ```json
 {
   "mcpServers": {
@@ -138,7 +122,7 @@ Add the server entry to `~/.gemini/config/mcp_config.json`:
       "command": "blenderagent-mcp",
       "args": [
         "--workspace",
-        "E:\\Decalga\\Proyecto blender\\blenderagent-bridge\\workspace"
+        "%LOCALAPPDATA%\\BlenderAgentBridge\\workspace"
       ],
       "env": {
         "BLENDERAGENT_PORT": "9876",
@@ -149,42 +133,27 @@ Add the server entry to `~/.gemini/config/mcp_config.json`:
 }
 ```
 
-### Claude Desktop Integration
-Add the server entry to `claude_desktop_config.json`:
-```json
-{
-  "mcpServers": {
-    "blenderagent-bridge": {
-      "command": "blenderagent-mcp",
-      "args": [
-        "--workspace",
-        "E:\\Decalga\\Proyecto blender\\blenderagent-bridge\\workspace"
-      ]
-    }
-  }
-}
+### OpenAI Codex Integration
+In `~/.codex/config.toml`:
+```toml
+[mcp_servers.blenderagent-bridge]
+command = "blenderagent-mcp"
+args = ["--workspace", "%LOCALAPPDATA%\\BlenderAgentBridge\\workspace"]
+
+[mcp_servers.blenderagent-bridge.env]
+BLENDERAGENT_PORT = "9876"
+PYTHONUNBUFFERED = "1"
 ```
-
----
-
-## Security Model
-
-- **Localhost Only**: The HTTP server strictly binds to `127.0.0.1`. Requests originating from any remote IP are blocked with HTTP 403.
-- **Session Authentication**: A cryptographic 32-character hexadecimal token is generated on startup. Every command requires an `Authorization: Bearer <token>` header verified via `secrets.compare_digest`.
-- **Transient Memory Storage**: The session token is stored in transient `bpy.types.WindowManager` runtime properties, ensuring tokens are **never** serialized into `.blend` project files.
-- **Strict Path Containment**: File write operations are resolved against the authoritative workspace directory. Path traversal sequences (`../`, `..\`), Windows alternate data streams (`:`), reserved device names (`CON`, `PRN`, `AUX`, `NUL`), and shared prefixes are rejected with `SECURITY_VIOLATION`.
-- **No Remote Code Execution**: `eval()`, `exec()`, arbitrary python scripts, and shell commands are completely disabled.
-- **Resource Limits**: Clamped image resolutions (up to 4096px), sampling limits (up to 512 samples), and execution timeouts with automatic deadline enforcement.
 
 ---
 
 ## Running Automated Tests
 
-The test suite includes 56 tests covering security attacks, Pydantic model validation, concurrency state machine, HTTP protocol defenses, and live end-to-end multi-object tests against real Blender 5.2:
+The test suite runs with `pytest` and verifies all security models, adapters, and handlers:
 
 ```bash
-# Run complete test suite (56 passed)
 pytest -v
+# 86 passed in ~28s
 ```
 
 ---
