@@ -157,10 +157,9 @@ def save_session_credentials(
         dpapi_b64 = base64.b64encode(dpapi_blob).decode("ascii")
 
     payload: Dict[str, Any] = {
-        "version": "0.2.0",
+        "version": "0.2.1",
         "port": int(port),
         "token": session_token,
-        "token_dpapi": dpapi_b64,
         "workspace": str(workspace_dir).replace("\\", "/"),
         "created_at": time.time(),
         "created_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

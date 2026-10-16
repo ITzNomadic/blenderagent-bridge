@@ -114,8 +114,15 @@ class AntigravityAdapter(ClientAdapter):
                             loaded = json.load(f)
                             if isinstance(loaded, dict):
                                 data = loaded
-                    except Exception:
-                        pass
+                            else:
+                                raise ValueError("Root element must be a JSON object.")
+                    except Exception as parse_err:
+                        return AdapterResult(
+                            status=AdapterStatus.ERROR,
+                            client_name=self.client_name,
+                            modified_file=cfg,
+                            message=f"Configuration file '{cfg.name}' exists but contains invalid JSON ({parse_err}). Aborted to protect existing user configuration.",
+                        )
 
                 if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
                     data["mcpServers"] = {}

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import os
 import pathlib
-from typing import Any, Dict
+import time
+from typing import Any, Dict, Optional
 try:
     import bpy
 except ImportError:
@@ -37,6 +38,43 @@ def _parse_strict_bool(val: Any, default: bool = False, param_name: str = "param
     raise InvalidArgumentError(f"Parameter '{param_name}' must be a boolean.")
 
 
+def _resolve_unique_or_guarded_path(
+    workspace: pathlib.Path,
+    raw_filename: Optional[str],
+    default_prefix: str,
+    overwrite: bool,
+) -> pathlib.Path:
+    """Resolve target path ensuring files are not overwritten without explicit permission."""
+    if not raw_filename or not isinstance(raw_filename, str) or not raw_filename.strip():
+        base_dir = workspace / "renders"
+        base_dir.mkdir(parents=True, exist_ok=True)
+        if overwrite:
+            return base_dir / f"{default_prefix}.png"
+        else:
+            primary = base_dir / f"{default_prefix}.png"
+            if not primary.exists():
+                return primary
+            ts = time.strftime("%Y%m%d_%H%M%S")
+            candidate = base_dir / f"{default_prefix}_{ts}.png"
+            counter = 1
+            while candidate.exists():
+                candidate = base_dir / f"{default_prefix}_{ts}_{counter}.png"
+                counter += 1
+            return candidate
+
+    filename = raw_filename.strip()
+    if not (filename.endswith(".png") or filename.endswith(".jpg")):
+        filename += ".png"
+
+    target_path = validate_workspace_path(workspace, filename, allow_create_dir=True)
+    if target_path.exists() and not overwrite:
+        raise FileAlreadyExistsError(
+            f"File '{target_path.name}' already exists in workspace. Set 'overwrite=true' to overwrite it.",
+            details={"file_path": str(target_path)},
+        )
+    return target_path
+
+
 def _get_workspace_dir(params: Dict[str, Any]) -> pathlib.Path:
     """Resolve the authoritative workspace directory from server configuration."""
     # 1. Authoritative server configuration
@@ -67,21 +105,14 @@ def handle_render_preview(params: Dict[str, Any], context: Any = None) -> Dict[s
     """Render a preview frame and write it safely into the workspace."""
     workspace = _get_workspace_dir(params)
 
-    # Validate output filename
-    raw_filename = params.get("output_filename", "renders/preview.png")
-    if not isinstance(raw_filename, str) or not raw_filename.strip():
-        raw_filename = "renders/preview.png"
-    if not (raw_filename.endswith(".png") or raw_filename.endswith(".jpg")):
-        raw_filename += ".png"
-
-    target_path = validate_workspace_path(workspace, raw_filename, allow_create_dir=True)
-
-    overwrite = _parse_strict_bool(params.get("overwrite"), default=True, param_name="overwrite")
-    if target_path.exists() and not overwrite:
-        raise FileAlreadyExistsError(
-            f"Render target file '{raw_filename}' already exists. Set 'overwrite=true' to replace it.",
-            details={"file_path": str(target_path)},
-        )
+    raw_filename = params.get("output_filename")
+    overwrite = _parse_strict_bool(params.get("overwrite"), default=False, param_name="overwrite")
+    target_path = _resolve_unique_or_guarded_path(
+        workspace=workspace,
+        raw_filename=raw_filename,
+        default_prefix="preview",
+        overwrite=overwrite,
+    )
 
     # Parameter boundaries
     try:
@@ -212,20 +243,14 @@ def handle_capture_viewport(params: Dict[str, Any], context: Any = None) -> Dict
     """Capture rapid viewport buffer (OpenGL / Workbench) without full path-tracing overhead."""
     workspace = _get_workspace_dir(params)
 
-    raw_filename = params.get("output_filename", "renders/viewport.png")
-    if not isinstance(raw_filename, str) or not raw_filename.strip():
-        raw_filename = "renders/viewport.png"
-    if not (raw_filename.endswith(".png") or raw_filename.endswith(".jpg")):
-        raw_filename += ".png"
-
-    target_path = validate_workspace_path(workspace, raw_filename, allow_create_dir=True)
-
-    overwrite = _parse_strict_bool(params.get("overwrite"), default=True, param_name="overwrite")
-    if target_path.exists() and not overwrite:
-        raise FileAlreadyExistsError(
-            f"Viewport capture file '{raw_filename}' already exists. Set 'overwrite=true' to replace it.",
-            details={"file_path": str(target_path)},
-        )
+    raw_filename = params.get("output_filename")
+    overwrite = _parse_strict_bool(params.get("overwrite"), default=False, param_name="overwrite")
+    target_path = _resolve_unique_or_guarded_path(
+        workspace=workspace,
+        raw_filename=raw_filename,
+        default_prefix="viewport",
+        overwrite=overwrite,
+    )
 
     try:
         w_val = int(params.get("width", 640))

@@ -560,20 +560,64 @@ class InstallerGUI:
         btn_uninst.pack(side="right")
 
     def run_test_connection(self):
-        """Run quick live health check."""
+        """Run verified live check using discovered session port and credentials."""
         import httpx
+        from .constants import DEFAULT_WORKSPACE_DIR, SESSION_FILE_PATH, LIVE_SESSION_FILE_PATH
+
+        port = 9876
+        token = None
+
+        for sfile in [LIVE_SESSION_FILE_PATH, SESSION_FILE_PATH]:
+            if sfile.exists():
+                try:
+                    with open(sfile, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if data.get("port"):
+                        port = int(data["port"])
+                    if data.get("token"):
+                        token = data["token"]
+                        break
+                except Exception:
+                    pass
+
         try:
-            with httpx.Client(timeout=2.0) as client:
-                res = client.get("http://127.0.0.1:9876/api/v1/health")
+            with httpx.Client(timeout=3.0) as client:
+                res = client.get(f"http://127.0.0.1:{port}/api/v1/health")
                 if res.status_code == 200:
-                    messagebox.showinfo("Connection Test", "✔ Bridge is active and responding on http://127.0.0.1:9876")
+                    health_info = res.json()
+                    version = health_info.get("version", "0.2.1")
+                    if token:
+                        auth_res = client.post(
+                            f"http://127.0.0.1:{port}/api/v1/commands",
+                            headers={"Authorization": f"Bearer {token}"},
+                            json={"command": "get_scene_info", "params": {}},
+                            timeout=3.0,
+                        )
+                        if auth_res.status_code == 200:
+                            scene_data = auth_res.json().get("data", {})
+                            active_obj = scene_data.get("active_object") or "None"
+                            messagebox.showinfo(
+                                "Connection Test",
+                                f"✔ Bridge ACTIVE & FULLY AUTHENTICATED!\n\n"
+                                f"• URL: http://127.0.0.1:{port}\n"
+                                f"• Version: v{version}\n"
+                                f"• Active Scene Object: {active_obj}\n\n"
+                                f"Ready for AI agent control.",
+                            )
+                            return
+                    messagebox.showinfo(
+                        "Connection Test",
+                        f"✔ Bridge is listening on http://127.0.0.1:{port} (v{version}).\n"
+                        f"Blender is active and responding.",
+                    )
                     return
         except Exception:
             pass
+
         messagebox.showwarning(
             "Connection Test",
-            "Bridge server is not currently listening on port 9876.\n"
-            "Open Blender and ensure the BlenderAgent Bridge panel is enabled.",
+            f"Bridge server is not currently listening on port {port}.\n\n"
+            "Open Blender to start the bridge automatically.",
         )
 
     def trigger_repair(self):

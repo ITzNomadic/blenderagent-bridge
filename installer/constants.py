@@ -1,4 +1,4 @@
-"""Constants and path configuration for BlenderAgent Bridge v0.2.0."""
+"""Constants and path configuration for BlenderAgent Bridge v0.2.1."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import sys
 APP_NAME = "BlenderAgent Bridge"
 APP_ID = "blenderagent-bridge"
 ADDON_ID = "blenderagent_bridge"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DEFAULT_PORT = 9876
 
 # Windows per-user directories (no admin elevation required)

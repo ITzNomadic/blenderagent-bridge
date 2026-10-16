@@ -248,7 +248,7 @@ def test_ba015_health_endpoint_v020_and_metrics():
         resp = conn.getresponse()
         assert resp.status == 200
         data = json.loads(resp.read().decode())
-        assert data["version"] == "0.2.0"
+        assert data["version"] == "0.2.1"
         assert "active_tasks" in data
         assert "processed_total" in data
         conn.close()
@@ -282,3 +282,104 @@ def test_ba017_blender_agent_error_instantiation():
     assert err.code == "BLENDER_AGENT_ERROR"
     assert err.message == "Single error message"
     assert str(err) == "Single error message"
+
+
+def test_c1_inflight_idempotency_conflict():
+    """C1: Concurrent request with same key but different command/payload triggers IDEMPOTENCY_CONFLICT."""
+    from addon.blenderagent_bridge.queue_manager import CommandTask
+    qm = ExecutionQueueManager(max_queue_size=10)
+    qm.start()
+
+    key = "conflict-key-test"
+    dummy_task = CommandTask("cmd_a", {})
+    with qm._lock:
+        # Simulate active in-flight task
+        qm._in_flight_idempotency[key] = (dummy_task, "cmd_a", "hash_a")
+
+    # Different command with same key
+    res = qm.submit_task("cmd_b", {}, timeout=1.0, idempotency_key=key)
+    assert res["status"] == "error"
+    assert res["error"]["code"] == "IDEMPOTENCY_CONFLICT"
+
+    qm.stop()
+
+
+def test_c3_antigravity_corrupt_json_protection():
+    """C3: Antigravity adapter refuses to overwrite corrupted JSON files."""
+    from installer.adapters.antigravity import AntigravityAdapter
+    from installer.adapters.base import AdapterStatus
+
+    with tempfile.TemporaryDirectory() as td:
+        cfg = pathlib.Path(td) / "mcp_config.json"
+        cfg.write_text("{corrupted_json: true, invalid", encoding="utf-8")
+
+        adapter = AntigravityAdapter(target_configs=[cfg])
+        res = adapter.install_registration(
+            launcher_path=pathlib.Path(td) / "launcher.bat",
+            workspace_dir=pathlib.Path(td),
+        )
+        assert res.success is False
+        assert res.status == AdapterStatus.ERROR
+        # Verify file content was preserved and not overwritten
+        assert cfg.read_text(encoding="utf-8") == "{corrupted_json: true, invalid"
+
+
+def test_c4_session_storage_no_redundant_dpapi_cleartext():
+    """C4: save_session_credentials payload does not duplicate cleartext in token_dpapi."""
+    from installer.security_manager import save_session_credentials
+
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td)
+        sfile, token = save_session_credentials(ws, port=9876)
+        with open(sfile, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        assert "token" in data
+        assert "token_dpapi" not in data, "Redundant plain token_dpapi field must be omitted"
+        assert data["token"] == token
+
+
+def test_c6_resolve_unique_or_guarded_path():
+    """C6: _resolve_unique_or_guarded_path generates unique name or fails gracefully when overwrite=False."""
+    from addon.blenderagent_bridge.handlers.render_save import _resolve_unique_or_guarded_path
+    from addon.blenderagent_bridge.security import FileAlreadyExistsError
+
+    with tempfile.TemporaryDirectory() as td:
+        ws = pathlib.Path(td)
+        renders_dir = ws / "renders"
+        renders_dir.mkdir()
+        target = renders_dir / "preview.png"
+        target.write_text("existing", encoding="utf-8")
+
+        # With explicit raw_filename and overwrite=False -> raises FileAlreadyExistsError
+        with pytest.raises(FileAlreadyExistsError):
+            _resolve_unique_or_guarded_path(ws, "renders/preview.png", default_prefix="preview", overwrite=False)
+
+        # Without raw_filename (default) and overwrite=False -> generates unique timestamped filename
+        unique_path = _resolve_unique_or_guarded_path(ws, None, default_prefix="preview", overwrite=False)
+        assert unique_path != target
+        assert unique_path.name.startswith("preview_")
+        assert unique_path.suffix == ".png"
+
+        # With overwrite=True -> returns requested path
+        assert _resolve_unique_or_guarded_path(ws, "renders/preview.png", default_prefix="preview", overwrite=True) == target
+
+
+
+def test_c7_orchestrator_frozen_payload_verification():
+    """C7: Orchestrator fails at step 0 if frozen payload assets are missing."""
+    import sys
+    from unittest.mock import patch
+    from installer.orchestrator import InstallationOrchestrator, InstallOptions
+
+    with tempfile.TemporaryDirectory() as td:
+        empty_dist = pathlib.Path(td) / "dist"
+        empty_dist.mkdir()
+
+        orch = InstallationOrchestrator(InstallOptions(install_dir=pathlib.Path(td) / "install"))
+        with patch.object(sys, "frozen", True, create=True):
+            with patch.object(orch, "_resolve_asset_dir", return_value=empty_dist):
+                success, steps = orch.run_installation()
+                assert success is False
+                assert steps[0].status == "failed"
+                assert "Missing or corrupted" in steps[0].message
+

@@ -6,6 +6,8 @@ import pathlib
 import shutil
 import zipfile
 
+from installer.constants import VERSION
+
 repo_root = pathlib.Path(r"e:\Decalga\Proyecto blender\blenderagent-bridge").resolve()
 dist_dir = repo_root / "dist"
 target_dir = pathlib.Path(r"e:\Decalga").resolve()
@@ -20,8 +22,8 @@ dst_setup = target_dir / "BlenderAgentBridge-Setup.exe"
 shutil.copy2(setup_exe, dst_setup)
 print(f"[+] Updated: {dst_setup} ({dst_setup.stat().st_size:,} bytes)")
 
-print("\n[*] 2. Assembling BlenderAgentBridge-v0.2.0-Windows.zip...")
-target_zip = target_dir / "BlenderAgentBridge-v0.2.0-Windows.zip"
+print(f"\n[*] 2. Assembling BlenderAgentBridge-v{VERSION}-Windows.zip...")
+target_zip = target_dir / f"BlenderAgentBridge-v{VERSION}-Windows.zip"
 
 def compute_sha256(path):
     h = hashlib.sha256()

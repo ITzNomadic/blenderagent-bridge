@@ -168,7 +168,7 @@ def get_global_session_file() -> pathlib.Path:
 
 
 def _atomic_write_json(target_path: pathlib.Path, data: Dict[str, Any]) -> None:
-    """Safely write JSON to a temporary file and atomically replace target."""
+    """Safely write JSON to a temporary file, enforce private ACLs, and atomically replace target."""
     target_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = target_path.with_name(f"{target_path.name}.tmp.{os.getpid()}_{time.time_ns()}")
     try:
@@ -180,6 +180,20 @@ def _atomic_write_json(target_path: pathlib.Path, data: Dict[str, Any]) -> None:
             except Exception:
                 pass
         os.replace(tmp_path, target_path)
+
+        if os.name == "nt":
+            try:
+                user = os.environ.get("USERNAME")
+                if user:
+                    import subprocess
+                    subprocess.run(
+                        ["icacls", str(target_path), "/inheritance:r", "/grant:r", f"{user}:(F)"],
+                        capture_output=True,
+                        check=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+            except Exception:
+                pass
     except Exception:
         if tmp_path.exists():
             try:
@@ -195,7 +209,7 @@ def write_session_file(token: str, port: int, workspace_dir: str | pathlib.Path)
     base.mkdir(parents=True, exist_ok=True)
     session_file = base / ".blenderagent_session.json"
     data = {
-        "version": "0.2.0",
+        "version": "0.2.1",
         "token": token,
         "port": port,
         "pid": os.getpid(),

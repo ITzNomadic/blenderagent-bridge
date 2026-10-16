@@ -207,11 +207,6 @@ class ExecutionQueueManager:
                         task.result_holder["error"] = None
                         task.result_holder["message"] = f"Command '{cmd_name}' completed successfully."
 
-                    # Cache result for idempotency if applicable
-                    if task.idempotency_key and task.status == TaskStatus.COMPLETED:
-                        with self._lock:
-                            self._idempotency_cache[task.idempotency_key] = dict(task.result_holder)
-
                 audit_logger.log(cmd_name, "SUCCESS" if task.status == TaskStatus.COMPLETED else "INTERRUPTED", f"OK: {cmd_name}")
 
             except BlenderAgentError as bae:
@@ -322,7 +317,7 @@ class ExecutionQueueManager:
         request_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Enqueue task and wait for completion or timeout with robust idempotency and in-flight deduplication."""
+        """Enqueue task and wait for completion or timeout with atomic idempotency and in-flight deduplication."""
         payload_hash = _hash_payload(command_name, params) if idempotency_key else None
         now = time.time()
 
@@ -339,11 +334,10 @@ class ExecutionQueueManager:
                     "request_id": request_id,
                 }
 
-            # 1. Check completed idempotency cache (BA-004)
+            # 1. Check completed idempotency cache (BA-004, C2)
             if idempotency_key and idempotency_key in self._idempotency_cache:
                 entry = self._idempotency_cache[idempotency_key]
                 if isinstance(entry, dict) and "result" in entry:
-                    # Validate TTL and matching command/params
                     if now - entry.get("timestamp", 0) <= self._cache_ttl_seconds:
                         if entry.get("command") == command_name and entry.get("payload_hash") == payload_hash:
                             cached = copy.deepcopy(entry["result"])
@@ -352,10 +346,17 @@ class ExecutionQueueManager:
                                 cached["request_id"] = request_id
                             return cached
                         else:
-                            # Mismatched command/params under the same key: invalidate stale cache
-                            del self._idempotency_cache[idempotency_key]
+                            return {
+                                "status": "error",
+                                "data": None,
+                                "error": {
+                                    "code": "IDEMPOTENCY_CONFLICT",
+                                    "message": f"Idempotency key '{idempotency_key}' was previously used for a different command or payload.",
+                                },
+                                "message": "Idempotency key conflict: mismatched payload.",
+                                "request_id": request_id,
+                            }
                     else:
-                        # Expired entry: evict
                         del self._idempotency_cache[idempotency_key]
                 elif isinstance(entry, dict) and "status" in entry:
                     cached = copy.deepcopy(entry)
@@ -364,66 +365,84 @@ class ExecutionQueueManager:
                         cached["request_id"] = request_id
                     return cached
 
-            # 2. Check in-flight deduplication (BA-003)
-            in_flight_task = None
+            # 2. Check in-flight deduplication (BA-003, C1, C2)
             if idempotency_key and idempotency_key in self._in_flight_idempotency:
-                candidate = self._in_flight_idempotency[idempotency_key]
-                with candidate.lock:
-                    if candidate.command_name == command_name:
-                        in_flight_task = candidate
+                entry = self._in_flight_idempotency[idempotency_key]
+                if isinstance(entry, tuple) and len(entry) >= 3:
+                    candidate_task, candidate_cmd, candidate_hash = entry[0], entry[1], entry[2]
+                elif isinstance(entry, dict):
+                    candidate_task = entry.get("task")
+                    candidate_cmd = entry.get("command")
+                    candidate_hash = entry.get("payload_hash")
+                else:
+                    candidate_task, candidate_cmd, candidate_hash = None, None, None
 
-        # If an identical task is already in flight, wait for its completion rather than executing twice!
-        if in_flight_task is not None:
-            in_flight_task.done_event.wait(timeout=timeout)
-            with in_flight_task.lock:
-                result = copy.deepcopy(in_flight_task.result_holder)
+                if candidate_cmd == command_name and candidate_hash == payload_hash and candidate_task:
+                    target_in_flight = candidate_task
+                else:
+                    return {
+                        "status": "error",
+                        "data": None,
+                        "error": {
+                            "code": "IDEMPOTENCY_CONFLICT",
+                            "message": f"Idempotency key '{idempotency_key}' is already in flight for a different operation or payload.",
+                        },
+                        "message": "Idempotency key conflict: concurrent operation with different payload.",
+                        "request_id": request_id,
+                    }
+            else:
+                target_in_flight = None
+
+            if target_in_flight is None:
+                # 3. Create fresh task and register atomically under the SAME lock (C1)
+                task = CommandTask(
+                    command_name=command_name,
+                    params=params,
+                    timeout=timeout,
+                    request_id=request_id,
+                    idempotency_key=idempotency_key,
+                )
+
+                # Memory bounds on _tasks_by_id (BA-014)
+                if len(self._tasks_by_id) >= 200:
+                    history_ids = {t.task_id for t in self._tasks_history}
+                    to_remove = [
+                        tid for tid, t in self._tasks_by_id.items()
+                        if tid not in history_ids and t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMED_OUT)
+                    ]
+                    for tid in to_remove[:50]:
+                        self._tasks_by_id.pop(tid, None)
+
+                self._tasks_by_id[task.task_id] = task
+                self._tasks_history.append(task)
+                if idempotency_key:
+                    self._in_flight_idempotency[idempotency_key] = (task, command_name, payload_hash)
+
+                try:
+                    self._queue.put_nowait(task)
+                except queue.Full:
+                    if idempotency_key:
+                        self._in_flight_idempotency.pop(idempotency_key, None)
+                    task.status = TaskStatus.FAILED
+                    task.result_holder["status"] = "error"
+                    task.result_holder["error"] = {
+                        "code": "QUEUE_FULL",
+                        "message": "Execution queue is at maximum capacity. Try again shortly.",
+                        "details": {"max_capacity": self._queue.maxsize},
+                    }
+                    task.done_event.set()
+                    audit_logger.log(command_name, "QUEUE_FULL", "Execution queue saturated")
+                    return task.result_holder
+
+        # Wait outside lock for in-flight task
+        if target_in_flight is not None:
+            target_in_flight.done_event.wait(timeout=timeout)
+            with target_in_flight.lock:
+                result = copy.deepcopy(target_in_flight.result_holder)
             result["cached_idempotent"] = True
             if request_id:
                 result["request_id"] = request_id
             return result
-
-        # 3. Create fresh task
-        task = CommandTask(
-            command_name=command_name,
-            params=params,
-            timeout=timeout,
-            request_id=request_id,
-            idempotency_key=idempotency_key,
-        )
-
-        with self._lock:
-            # Memory bounds on _tasks_by_id (BA-014)
-            if len(self._tasks_by_id) >= 200:
-                history_ids = {t.task_id for t in self._tasks_history}
-                to_remove = [
-                    tid for tid, t in self._tasks_by_id.items()
-                    if tid not in history_ids and t.status in (TaskStatus.COMPLETED, TaskStatus.FAILED, TaskStatus.CANCELLED, TaskStatus.TIMED_OUT)
-                ]
-                for tid in to_remove[:50]:
-                    self._tasks_by_id.pop(tid, None)
-
-            self._tasks_by_id[task.task_id] = task
-            self._tasks_history.append(task)
-            if idempotency_key:
-                self._in_flight_idempotency[idempotency_key] = task
-
-        # Enqueue with overflow protection
-        try:
-            self._queue.put_nowait(task)
-        except queue.Full:
-            with self._lock:
-                if idempotency_key:
-                    self._in_flight_idempotency.pop(idempotency_key, None)
-            task.status = TaskStatus.FAILED
-            task.result_holder["status"] = "error"
-            task.result_holder["error"] = {
-                "code": "QUEUE_FULL",
-                "message": "Execution queue is at maximum capacity. Try again shortly.",
-                "details": {"max_capacity": self._queue.maxsize},
-            }
-            task.done_event.set()
-            audit_logger.log(command_name, "QUEUE_FULL", "Execution queue saturated")
-            return task.result_holder
 
         try:
             # Await completion on calling HTTP worker thread
@@ -462,9 +481,8 @@ class ExecutionQueueManager:
             with self._lock:
                 if idempotency_key:
                     self._in_flight_idempotency.pop(idempotency_key, None)
-                    # Cache result if successfully completed or cleanly finished
+                    # Cache result canonically if finished
                     if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
-                        # Evict oldest if cache exceeded max size
                         if len(self._idempotency_cache) >= self._cache_max_size:
                             oldest_key = min(
                                 self._idempotency_cache.keys(),

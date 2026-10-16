@@ -122,6 +122,16 @@ class CodexAdapter(ClientAdapter):
                     message=f"Corrupt or unreadable Codex config.toml: {err}",
                     error_code="CLIENT_CONFIG_INVALID",
                 )
+            if tomllib and original_text.strip():
+                try:
+                    _ = tomllib.loads(original_text)
+                except Exception as corrupt_err:
+                    return AdapterResult(
+                        success=False,
+                        status=AdapterStatus.ERROR,
+                        message=f"Codex config.toml contains invalid TOML syntax ({corrupt_err}). Aborted to protect existing user configuration.",
+                        error_code="CLIENT_CONFIG_INVALID",
+                    )
 
         # Method 1: If tomli_w is available, update structured dictionary
         applied_via_dict = False

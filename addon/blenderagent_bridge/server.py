@@ -252,7 +252,7 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             self._send_json_response({
                 "status": "healthy",
                 "service": "blenderagent-bridge",
-                "version": "0.2.0",
+                "version": "0.2.1",
                 "active_tasks": queue_manager.active_count,
                 "processed_total": audit_logger.total_count,
             })

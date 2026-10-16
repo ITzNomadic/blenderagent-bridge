@@ -160,6 +160,24 @@ class InstallationOrchestrator:
         bin_dir.mkdir(parents=True, exist_ok=True)
         target_launcher = bin_dir / MCP_LAUNCHER_EXE_NAME
 
+        # Verify payload integrity
+        is_frozen = getattr(sys, "frozen", False)
+        if is_frozen:
+            source_exe = dist_dir / MCP_LAUNCHER_EXE_NAME
+            addon_zip = dist_dir / f"{ADDON_ID}.zip"
+            if not source_exe.exists() or source_exe.stat().st_size == 0:
+                update_step(0, "failed", f"Missing or corrupted runtime executable payload: {source_exe.name}")
+                return False, steps
+            if not addon_zip.exists() or addon_zip.stat().st_size == 0:
+                update_step(0, "failed", f"Missing or corrupted addon zip payload: {addon_zip.name}")
+                return False, steps
+        else:
+            repo_root = pathlib.Path(__file__).parent.parent.resolve()
+            addon_src = repo_root / "addon" / ADDON_ID
+            if not (dist_dir / f"{ADDON_ID}.zip").exists() and not addon_src.exists():
+                update_step(0, "failed", f"Addon source directory not found: {addon_src}")
+                return False, steps
+
         update_step(0, "done", "Payload verification complete.")
 
         # 2. Stage directories
@@ -226,6 +244,7 @@ class InstallationOrchestrator:
                 update_step(4, "done", ag_res.message)
             else:
                 update_step(4, "failed", ag_res.message)
+                return False, steps
         else:
             update_step(4, "skipped", "Antigravity integration disabled by user.")
 
@@ -241,6 +260,7 @@ class InstallationOrchestrator:
                 update_step(5, "done", codex_res.message)
             else:
                 update_step(5, "failed", codex_res.message)
+                return False, steps
         else:
             update_step(5, "skipped", "Codex integration disabled by user.")
 
