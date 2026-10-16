@@ -13,7 +13,7 @@ import sys
 import time
 from typing import Any, Dict, Optional, Tuple
 
-from .constants import DEFAULT_WORKSPACE_DIR, SESSION_FILE_PATH
+from .constants import DEFAULT_WORKSPACE_DIR, LIVE_SESSION_FILE_PATH, SESSION_FILE_PATH
 
 
 # Windows DPAPI structures
@@ -159,7 +159,7 @@ def save_session_credentials(
         "created_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
-    # Write atomically
+    # Write atomically to workspace
     tmp_file = session_file.with_suffix(".tmp")
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
@@ -169,15 +169,32 @@ def save_session_credentials(
     # Restrict ACLs
     set_windows_private_acls(session_file)
 
+    # Also persist to global live_session_file as single source of truth
+    try:
+        LIVE_SESSION_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_global = LIVE_SESSION_FILE_PATH.with_suffix(".tmp")
+        with open(tmp_global, "w", encoding="utf-8") as gf:
+            json.dump(payload, gf, indent=2)
+        tmp_global.replace(LIVE_SESSION_FILE_PATH)
+        set_windows_private_acls(LIVE_SESSION_FILE_PATH)
+    except Exception:
+        pass
+
     return session_file, session_token
 
 
-def load_session_credentials(workspace_dir: pathlib.Path) -> Optional[Dict[str, Any]]:
-    """Retrieve and verify session metadata and token from the workspace."""
-    workspace_dir = pathlib.Path(workspace_dir).resolve()
-    session_file = workspace_dir / ".blenderagent_session.json"
+def load_session_credentials(workspace_dir: Optional[pathlib.Path] = None) -> Optional[Dict[str, Any]]:
+    """Retrieve and verify session metadata and token from the global session file or workspace."""
+    session_file = None
+    if workspace_dir:
+        candidate = pathlib.Path(workspace_dir).resolve() / ".blenderagent_session.json"
+        if candidate.exists():
+            session_file = candidate
 
-    if not session_file.exists():
+    if not session_file and LIVE_SESSION_FILE_PATH.exists():
+        session_file = LIVE_SESSION_FILE_PATH
+
+    if not session_file or not session_file.exists():
         return None
 
     try:

@@ -29,20 +29,38 @@ class BlenderBridgeClient:
         ).resolve()
         self.token = token or os.environ.get("BLENDERAGENT_TOKEN", "")
 
-    def _discover_session(self) -> None:
-        """Attempt auto-discovery of session metadata from workspace if token is unset."""
-        if self.token:
-            return
+    def _discover_session(self, force: bool = False) -> bool:
+        """Attempt auto-discovery of session metadata from workspace or global live session."""
+        if not force and self.token:
+            return True
 
-        session_file = self.workspace_dir / ".blenderagent_session.json"
-        if session_file.exists():
-            try:
-                with open(session_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    self.token = data.get("token", self.token)
-                    self.port = int(data.get("port", self.port))
-            except Exception:
-                pass
+        candidate_paths = []
+        # 1. Primary: Explicitly configured workspace
+        if self.workspace_dir:
+            candidate_paths.append(self.workspace_dir / ".blenderagent_session.json")
+
+        # 2. Secondary: Global system-wide live session
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            candidate_paths.append(pathlib.Path(local_appdata) / "BlenderAgentBridge" / "live_session.json")
+            candidate_paths.append(pathlib.Path(local_appdata) / "BlenderAgentBridge" / "workspace" / ".blenderagent_session.json")
+
+        candidate_paths.append(pathlib.Path.cwd() / "workspace" / ".blenderagent_session.json")
+        candidate_paths.append(pathlib.Path.home() / ".blenderagent" / "live_session.json")
+
+        for session_file in candidate_paths:
+            if session_file.exists():
+                try:
+                    with open(session_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    tok = data.get("token")
+                    if tok:
+                        self.token = tok
+                        self.port = int(data.get("port", self.port))
+                        return True
+                except Exception:
+                    pass
+        return bool(self.token)
 
     @property
     def base_url(self) -> str:
@@ -64,7 +82,7 @@ class BlenderBridgeClient:
         params: Optional[Dict[str, Any]] = None,
         timeout: float = 35.0,
     ) -> ResponseEnvelope:
-        """Send a command payload to the BlenderAgent Bridge and receive the standardized response."""
+        """Send a command payload to the BlenderAgent Bridge with transparent 401 re-authentication."""
         self._discover_session()
 
         payload = {
@@ -86,10 +104,37 @@ class BlenderBridgeClient:
                     json=payload,
                     headers=headers,
                 )
+
+                # Automatic recovery on 401: Token rotated or out-of-sync
+                if res.status_code == 401:
+                    self.token = ""
+                    if self._discover_session(force=True):
+                        headers["Authorization"] = f"Bearer {self.token}"
+                        res = client.post(
+                            f"{self.base_url}/api/v1/command",
+                            json=payload,
+                            headers=headers,
+                        )
+
                 raw_json = res.json()
                 return ResponseEnvelope.model_validate(raw_json)
 
         except httpx.ConnectError:
+            # Check if port or session changed and retry once
+            old_port = self.port
+            if self._discover_session(force=True) and self.port != old_port:
+                try:
+                    with httpx.Client(timeout=timeout) as client:
+                        headers["Authorization"] = f"Bearer {self.token}"
+                        res = client.post(
+                            f"{self.base_url}/api/v1/command",
+                            json=payload,
+                            headers=headers,
+                        )
+                        return ResponseEnvelope.model_validate(res.json())
+                except Exception:
+                    pass
+
             return ResponseEnvelope(
                 status="error",
                 error=ErrorDetail(

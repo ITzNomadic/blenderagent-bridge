@@ -237,4 +237,20 @@ def test_task_cancel_endpoint(test_server):
         assert task.cancel_event.is_set()
 
 
+def test_client_auto_reauth_on_401(test_server, temp_workspace):
+    """Verify that if the client has a stale token, it automatically re-discovers the live token on 401."""
+    from mcp_server.client import BlenderBridgeClient
+    server, port, valid_token = test_server
+
+    # Initialize client with an intentionally stale token
+    client = BlenderBridgeClient(port=port, token="stale_outdated_token_xyz", workspace_dir=temp_workspace)
+
+    # Calling send_command receives 401, forces re-discovery from session file, and retries successfully
+    resp = client.send_command("unknown_invalid_action", {})
+    assert resp.error is not None
+    assert resp.error.code == "INVALID_ARGUMENT"  # Passed authentication and reached dispatcher
+    assert client.token == valid_token
+
+
+
 

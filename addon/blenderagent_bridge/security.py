@@ -148,19 +148,41 @@ def validate_workspace_path(
     return target
 
 
+def get_global_session_file() -> pathlib.Path:
+    """Return central, authoritative live_session.json path across all tools and clients."""
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    if local_appdata:
+        dir_path = pathlib.Path(local_appdata) / "BlenderAgentBridge"
+    else:
+        dir_path = pathlib.Path.home() / ".blenderagent"
+    dir_path.mkdir(parents=True, exist_ok=True)
+    return dir_path / "live_session.json"
+
+
 def write_session_file(token: str, port: int, workspace_dir: str | pathlib.Path) -> pathlib.Path:
-    """Write session metadata to .blenderagent_session.json in workspace."""
+    """Write session metadata to .blenderagent_session.json in workspace and global live_session.json."""
     base = pathlib.Path(workspace_dir).resolve()
+    base.mkdir(parents=True, exist_ok=True)
     session_file = base / ".blenderagent_session.json"
     data = {
+        "version": "0.2.0",
         "token": token,
         "port": port,
+        "pid": os.getpid(),
         "workspace": str(base),
         "created_at": time.time(),
         "host": "127.0.0.1",
     }
     with open(session_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+    try:
+        global_file = get_global_session_file()
+        with open(global_file, "w", encoding="utf-8") as gf:
+            json.dump(data, gf, indent=2)
+    except Exception:
+        pass
+
     return session_file
 
 
@@ -171,6 +193,13 @@ def remove_session_file(workspace_dir: str | pathlib.Path) -> None:
         session_file = base / ".blenderagent_session.json"
         if session_file.exists():
             session_file.unlink()
+    except Exception:
+        pass
+
+    try:
+        global_file = get_global_session_file()
+        if global_file.exists():
+            global_file.unlink()
     except Exception:
         pass
 

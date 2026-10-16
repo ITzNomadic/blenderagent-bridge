@@ -8,6 +8,8 @@ import os
 import pathlib
 import secrets
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import socket
+import sys
 import threading
 from typing import Any, Dict, Optional, Tuple
 
@@ -20,6 +22,21 @@ from .security import (
 )
 
 logger = logging.getLogger("blenderagent_bridge.server")
+
+
+class ExclusiveThreadingHTTPServer(ThreadingHTTPServer):
+    """Threading HTTPServer enforcing exclusive socket binding to prevent port collisions on Windows."""
+    allow_reuse_address = False
+
+    def server_bind(self):
+        if sys.platform == "win32":
+            try:
+                # SO_EXCLUSIVEADDRUSE (-5) guarantees no other process can share or hijack the port
+                opt = getattr(socket, "SO_EXCLUSIVEADDRUSE", -5)
+                self.socket.setsockopt(socket.SOL_SOCKET, opt, 1)
+            except Exception:
+                pass
+        super().server_bind()
 
 
 class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
@@ -385,11 +402,11 @@ class BlenderAgentServer:
             BridgeHTTPRequestHandler.workspace_dir = self._workspace
 
             try:
-                # Bind strictly to 127.0.0.1 IPv4 loopback
-                self._httpd = ThreadingHTTPServer(("127.0.0.1", self._port), BridgeHTTPRequestHandler)
+                # Bind strictly to 127.0.0.1 IPv4 loopback exclusively
+                self._httpd = ExclusiveThreadingHTTPServer(("127.0.0.1", self._port), BridgeHTTPRequestHandler)
             except OSError as err:
                 audit_logger.log("SERVER_START", "FAILED", f"Cannot bind to 127.0.0.1:{self._port}: {err}")
-                return False, f"Failed to bind port {self._port}: {err}"
+                return False, f"Failed to bind port {self._port} (port already in use by another instance): {err}"
 
             # Start main thread queue consumer
             queue_manager.start()

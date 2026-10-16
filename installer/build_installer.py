@@ -47,29 +47,26 @@ def build_all():
     if not pathlib.Path(pyinstaller_exe).exists():
         pyinstaller_exe = "pyinstaller"
 
-    if not launcher_exe.exists():
-        print(f"\n[*] Step 2: Compiling {MCP_LAUNCHER_EXE_NAME} via PyInstaller...")
-        cmd_mcp = [
-            pyinstaller_exe,
-            "--noconfirm",
-            "--clean",
-            "--onefile",
-            "--console",
-            "--name",
-            "blenderagent-mcp",
-            "--distpath",
-            str(dist_dir),
-            "--paths",
-            ".",
-            "mcp_server/launcher.py",
-        ]
-        res = subprocess.run(cmd_mcp, cwd=str(repo_root))
-        if res.returncode != 0:
-            print(f"[!] Error building {MCP_LAUNCHER_EXE_NAME}")
-            sys.exit(1)
-        print(f"[+] {MCP_LAUNCHER_EXE_NAME} compiled successfully.")
-    else:
-        print(f"\n[*] Step 2: Found existing {MCP_LAUNCHER_EXE_NAME} ({launcher_exe.stat().st_size:,} bytes)")
+    print(f"\n[*] Step 2: Compiling {MCP_LAUNCHER_EXE_NAME} via PyInstaller...")
+    cmd_mcp = [
+        pyinstaller_exe,
+        "--noconfirm",
+        "--clean",
+        "--onefile",
+        "--console",
+        "--name",
+        "blenderagent-mcp",
+        "--distpath",
+        str(dist_dir),
+        "--paths",
+        ".",
+        "mcp_server/launcher.py",
+    ]
+    res = subprocess.run(cmd_mcp, cwd=str(repo_root))
+    if res.returncode != 0:
+        print(f"[!] Error building {MCP_LAUNCHER_EXE_NAME}")
+        sys.exit(1)
+    print(f"[+] {MCP_LAUNCHER_EXE_NAME} compiled successfully.")
 
     # 3. Compile Single-File Windows Installer (BlenderAgentBridge-Setup.exe)
     print("\n[*] Step 3: Compiling BlenderAgentBridge-Setup.exe...")
