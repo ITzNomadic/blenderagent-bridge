@@ -146,8 +146,32 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
 
         return True
 
+    @classmethod
+    def _read_session_token_from_disk(cls) -> Optional[str]:
+        """Attempt to read token from workspace or global live session file on disk."""
+        candidates = []
+        if getattr(cls, "workspace_dir", None):
+            candidates.append(pathlib.Path(cls.workspace_dir) / ".blenderagent_session.json")
+        try:
+            from .security import get_global_session_file
+            candidates.append(get_global_session_file())
+        except Exception:
+            pass
+
+        for p in candidates:
+            if p and p.exists():
+                try:
+                    with open(p, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    tok = data.get("token")
+                    if tok and isinstance(tok, str) and len(tok) == 32:
+                        return tok
+                except Exception:
+                    pass
+        return None
+
     def _verify_auth_token(self) -> bool:
-        """Verify Bearer token using constant-time comparison."""
+        """Verify Bearer token using constant-time comparison with dynamic session reload."""
         auth_header = self.headers.get("Authorization", "").strip()
         client_ip = self.client_address[0] if self.client_address else "127.0.0.1"
 
@@ -164,8 +188,8 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             return False
 
         token_candidate = auth_header[7:].strip()
-        if not token_candidate or not self.server_token or not secrets.compare_digest(token_candidate, self.server_token):
-            audit_logger.log("AUTH_FAILURE", "REJECTED", "Incorrect Bearer token", client_ip)
+        if not token_candidate:
+            audit_logger.log("AUTH_FAILURE", "REJECTED", "Empty Bearer token", client_ip)
             self._send_json_response({
                 "status": "error",
                 "error": {
@@ -176,7 +200,26 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             }, status_code=401)
             return False
 
-        return True
+        # 1. Match current in-memory server token
+        if self.server_token and secrets.compare_digest(token_candidate, self.server_token):
+            return True
+
+        # 2. Dynamic reload fallback: Check if session file on disk has updated token
+        disk_token = self._read_session_token_from_disk()
+        if disk_token and secrets.compare_digest(token_candidate, disk_token):
+            BridgeHTTPRequestHandler.server_token = disk_token
+            return True
+
+        audit_logger.log("AUTH_FAILURE", "REJECTED", "Incorrect Bearer token", client_ip)
+        self._send_json_response({
+            "status": "error",
+            "error": {
+                "code": "UNAUTHORIZED",
+                "message": "Invalid authentication token.",
+            },
+            "message": "Unauthorized: Access token rejected.",
+        }, status_code=401)
+        return False
 
     def do_GET(self) -> None:
         """Health check and task diagnostic endpoint."""

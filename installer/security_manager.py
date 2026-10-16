@@ -169,17 +169,6 @@ def save_session_credentials(
     # Restrict ACLs
     set_windows_private_acls(session_file)
 
-    # Also persist to global live_session_file as single source of truth
-    try:
-        LIVE_SESSION_FILE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        tmp_global = LIVE_SESSION_FILE_PATH.with_suffix(".tmp")
-        with open(tmp_global, "w", encoding="utf-8") as gf:
-            json.dump(payload, gf, indent=2)
-        tmp_global.replace(LIVE_SESSION_FILE_PATH)
-        set_windows_private_acls(LIVE_SESSION_FILE_PATH)
-    except Exception:
-        pass
-
     return session_file, session_token
 
 

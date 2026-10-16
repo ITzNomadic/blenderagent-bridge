@@ -26,6 +26,19 @@ class WM_OT_BlenderAgentStartBridge(Operator):
         token = getattr(wm, "blenderagent_token", "").strip() or None
         workspace = getattr(wm, "blenderagent_workspace_dir", "").strip() or None
 
+        if not token and workspace:
+            ws_session = pathlib.Path(workspace) / ".blenderagent_session.json"
+            if ws_session.exists():
+                try:
+                    import json
+                    with open(ws_session, "r", encoding="utf-8") as f:
+                        saved = json.load(f)
+                    tok = saved.get("token")
+                    if tok and isinstance(tok, str) and len(tok) == 32:
+                        token = tok
+                except Exception:
+                    pass
+
         success, msg = bridge_server.start(port=port, token=token, workspace_dir=workspace)
         if success:
             wm.blenderagent_is_running = True
