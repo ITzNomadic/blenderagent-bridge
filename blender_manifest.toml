@@ -1,6 +1,6 @@
 schema_version = "1.0.0"
 id = "blenderagent_bridge"
-version = "0.2.1"
+version = "0.2.2"
 name = "BlenderAgent Bridge"
 tagline = "Structured and secure MCP control bridge for Blender"
 maintainer = "BlenderAgent Team <dev@blenderagent.local>"

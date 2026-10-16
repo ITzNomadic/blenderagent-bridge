@@ -11,12 +11,19 @@ from addon.blenderagent_bridge.queue_manager import queue_manager, TaskStatus
 from addon.blenderagent_bridge.server import BlenderAgentServer
 
 
+import socket
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 @pytest.fixture
 def test_server(temp_workspace):
     """Spin up a dedicated test instance of BlenderAgentServer on an ephemeral port."""
     server = BlenderAgentServer()
-    # Choose a high port for testing
-    port = 9885
+    port = _find_free_port()
     token = "test_secret_token_123456789012"
     success, msg = server.start(port=port, token=token, workspace_dir=temp_workspace)
     assert success, f"Failed to start test server: {msg}"
@@ -33,10 +40,12 @@ def test_server(temp_workspace):
     t = threading.Thread(target=mock_main_thread, daemon=True)
     t.start()
 
-    yield server, port, token
+    try:
+        yield server, port, token
+    finally:
+        stop_sim.set()
+        server.stop()
 
-    stop_sim.set()
-    server.stop()
 
 
 def test_health_endpoint(test_server):

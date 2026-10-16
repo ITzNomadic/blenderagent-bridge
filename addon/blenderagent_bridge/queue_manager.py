@@ -233,8 +233,27 @@ class ExecutionQueueManager:
 
             finally:
                 task.finished_at = time.time()
+                with task.lock:
+                    final_result = copy.deepcopy(task.result_holder)
                 task.done_event.set()
                 self._queue.task_done()
+
+                # V21-002: Transition in-flight idempotency to completed cache based on actual task execution lifecycle
+                if task.idempotency_key:
+                    with self._lock:
+                        self._in_flight_idempotency.pop(task.idempotency_key, None)
+                        if len(self._idempotency_cache) >= self._cache_max_size:
+                            oldest_key = min(
+                                self._idempotency_cache.keys(),
+                                key=lambda k: self._idempotency_cache[k].get("timestamp", 0),
+                            )
+                            self._idempotency_cache.pop(oldest_key, None)
+                        self._idempotency_cache[task.idempotency_key] = {
+                            "result": final_result,
+                            "command": task.command_name,
+                            "payload_hash": _hash_payload(task.command_name, task.params),
+                            "timestamp": time.time(),
+                        }
 
         with self._lock:
             if self._is_timer_running:
@@ -434,9 +453,28 @@ class ExecutionQueueManager:
                     audit_logger.log(command_name, "QUEUE_FULL", "Execution queue saturated")
                     return task.result_holder
 
-        # Wait outside lock for in-flight task
+        # Wait outside lock for in-flight task (V21-003)
         if target_in_flight is not None:
-            target_in_flight.done_event.wait(timeout=timeout)
+            signaled = target_in_flight.done_event.wait(timeout=timeout)
+            if not signaled:
+                return {
+                    "status": "error",
+                    "data": None,
+                    "error": {
+                        "code": "TASK_STILL_RUNNING",
+                        "message": f"Command '{command_name}' is currently in progress (task {target_in_flight.task_id}). Await completion or retry.",
+                        "details": {
+                            "task_id": target_in_flight.task_id,
+                            "command": command_name,
+                            "timeout_seconds": timeout,
+                            "in_flight": True,
+                        },
+                    },
+                    "message": f"Execution timed out after {timeout}s while waiting for in-flight task {target_in_flight.task_id}.",
+                    "task_id": target_in_flight.task_id,
+                    "request_id": request_id,
+                    "cached_idempotent": False,
+                }
             with target_in_flight.lock:
                 result = copy.deepcopy(target_in_flight.result_holder)
             result["cached_idempotent"] = True
@@ -450,52 +488,68 @@ class ExecutionQueueManager:
 
             if not completed:
                 with task.lock:
+                    is_running = (task.status == TaskStatus.RUNNING)
                     task.cancel_event.set()
-                    is_queued = (task.status == TaskStatus.QUEUED)
-                    task.status = TaskStatus.TIMED_OUT
-                    task.result_holder["status"] = "error"
-                    if is_queued:
+                    if is_running:
+                        caller_response = {
+                            "status": "error",
+                            "data": None,
+                            "error": {
+                                "code": "EXECUTION_TIMEOUT",
+                                "message": f"Command '{command_name}' timed out after {timeout}s while executing.",
+                                "details": {
+                                    "phase": "running",
+                                    "task_id": task.task_id,
+                                    "timeout_seconds": timeout,
+                                    "state": "blender_operation_in_flight",
+                                    "note": "Operation is actively executing in Blender and cannot be preempted asynchronously.",
+                                },
+                            },
+                            "message": "Operation timed out while executing on Blender main thread.",
+                            "task_id": task.task_id,
+                            "request_id": request_id,
+                        }
+                    else:
+                        task.status = TaskStatus.TIMED_OUT
+                        task.result_holder["status"] = "error"
                         task.result_holder["error"] = {
                             "code": "EXECUTION_TIMEOUT",
                             "message": f"Command '{command_name}' expired in queue after {timeout}s before starting.",
                             "details": {"phase": "queued", "timeout_seconds": timeout},
                         }
-                    else:
-                        task.result_holder["error"] = {
-                            "code": "EXECUTION_TIMEOUT",
-                            "message": f"Command '{command_name}' timed out after {timeout}s while executing.",
-                            "details": {
-                                "phase": "running",
-                                "timeout_seconds": timeout,
-                                "state": "blender_operation_in_flight",
-                                "note": "Operation was in-flight on Blender's main thread and cannot be forcibly preempted asynchronously.",
-                            },
-                        }
-                    task.result_holder["message"] = "Operation timed out."
+                        task.result_holder["message"] = "Operation expired in queue."
+                        caller_response = copy.deepcopy(task.result_holder)
 
-                audit_logger.log(command_name, "TIMEOUT", f"Timed out after {timeout}s ({task.status.value})")
+                audit_logger.log(command_name, "TIMEOUT", f"Timed out after {timeout}s (running={is_running})")
+                return caller_response
 
-            return copy.deepcopy(task.result_holder)
+            with task.lock:
+                return copy.deepcopy(task.result_holder)
 
         finally:
             with self._lock:
                 if idempotency_key:
-                    self._in_flight_idempotency.pop(idempotency_key, None)
-                    # Cache result canonically if finished
-                    if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
-                        if len(self._idempotency_cache) >= self._cache_max_size:
-                            oldest_key = min(
-                                self._idempotency_cache.keys(),
-                                key=lambda k: self._idempotency_cache[k].get("timestamp", 0),
-                            )
-                            self._idempotency_cache.pop(oldest_key, None)
+                    with task.lock:
+                        is_running = (task.status == TaskStatus.RUNNING)
+                    # V21-002: If task is STILL actively executing on Blender main thread, DO NOT pop in-flight!
+                    # The in-flight reservation must belong to the real task execution, not HTTP caller timeout.
+                    # process_queue_tick will pop and cache once Blender finishes.
+                    if not is_running:
+                        self._in_flight_idempotency.pop(idempotency_key, None)
+                        if task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
+                            if len(self._idempotency_cache) >= self._cache_max_size:
+                                oldest_key = min(
+                                    self._idempotency_cache.keys(),
+                                    key=lambda k: self._idempotency_cache[k].get("timestamp", 0),
+                                )
+                                self._idempotency_cache.pop(oldest_key, None)
 
-                        self._idempotency_cache[idempotency_key] = {
-                            "result": copy.deepcopy(task.result_holder),
-                            "command": command_name,
-                            "payload_hash": payload_hash,
-                            "timestamp": time.time(),
-                        }
+                            self._idempotency_cache[idempotency_key] = {
+                                "result": copy.deepcopy(task.result_holder),
+                                "command": command_name,
+                                "payload_hash": payload_hash,
+                                "timestamp": time.time(),
+                            }
 
 
 # Global queue manager singleton

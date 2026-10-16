@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import pathlib
+import sys
 import tempfile
 import pytest
 
@@ -27,6 +28,7 @@ from installer.security_manager import (
 )
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows DPAPI only")
 def test_token_generation_and_dpapi():
     """Verify cryptographic token entropy and DPAPI roundtrip."""
     tok = generate_secure_token()
@@ -124,9 +126,12 @@ def test_codex_adapter_lifecycle(tmp_path):
     assert res.status == AdapterStatus.CONFIGURED
 
     # Verify TOML content
-    import tomli
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
     with open(cfg_file, "rb") as f:
-        data = tomli.load(f)
+        data = tomllib.load(f)
     assert data.get("model") == "gpt-5"
     assert "existing_node" in data["mcp_servers"]
     assert "blenderagent-bridge" in data["mcp_servers"]
@@ -139,7 +144,7 @@ def test_codex_adapter_lifecycle(tmp_path):
     uninst_res = adapter.uninstall_registration()
     assert uninst_res.success
     with open(cfg_file, "rb") as f:
-        data_after = tomli.load(f)
+        data_after = tomllib.load(f)
     assert "existing_node" in data_after["mcp_servers"]
     assert "blenderagent-bridge" not in data_after["mcp_servers"]
 

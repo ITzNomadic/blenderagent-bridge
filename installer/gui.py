@@ -561,6 +561,7 @@ class InstallerGUI:
 
     def run_test_connection(self):
         """Run verified live check using discovered session port and credentials."""
+        import json
         import httpx
         from .constants import DEFAULT_WORKSPACE_DIR, SESSION_FILE_PATH, LIVE_SESSION_FILE_PATH
 
@@ -585,39 +586,80 @@ class InstallerGUI:
                 res = client.get(f"http://127.0.0.1:{port}/api/v1/health")
                 if res.status_code == 200:
                     health_info = res.json()
-                    version = health_info.get("version", "0.2.1")
-                    if token:
-                        auth_res = client.post(
-                            f"http://127.0.0.1:{port}/api/v1/commands",
-                            headers={"Authorization": f"Bearer {token}"},
-                            json={"command": "get_scene_info", "params": {}},
-                            timeout=3.0,
+                    version = health_info.get("version", "0.2.2")
+
+                    if not token:
+                        messagebox.showwarning(
+                            "Connection Test",
+                            f"HTTP server is reachable at http://127.0.0.1:{port} (v{version}), "
+                            f"but no session token was found on disk.\n\n"
+                            f"Restart Blender or check that BlenderAgent Bridge extension is enabled.",
                         )
-                        if auth_res.status_code == 200:
-                            scene_data = auth_res.json().get("data", {})
+                        return
+
+                    # Verify authenticated RPC command
+                    auth_res = client.post(
+                        f"http://127.0.0.1:{port}/api/v1/command",
+                        headers={"Authorization": f"Bearer {token}"},
+                        json={"command": "get_scene_info", "params": {}},
+                        timeout=3.0,
+                    )
+                    if auth_res.status_code == 200:
+                        payload = auth_res.json()
+                        if payload.get("status") == "success":
+                            scene_data = payload.get("data", {})
                             active_obj = scene_data.get("active_object") or "None"
+                            obj_count = len(scene_data.get("objects", []))
                             messagebox.showinfo(
                                 "Connection Test",
                                 f"✔ Bridge ACTIVE & FULLY AUTHENTICATED!\n\n"
                                 f"• URL: http://127.0.0.1:{port}\n"
                                 f"• Version: v{version}\n"
-                                f"• Active Scene Object: {active_obj}\n\n"
-                                f"Ready for AI agent control.",
+                                f"• Active Object: {active_obj}\n"
+                                f"• Scene Objects: {obj_count}\n\n"
+                                f"MCP tools are fully operational for AI agents.",
                             )
                             return
-                    messagebox.showinfo(
-                        "Connection Test",
-                        f"✔ Bridge is listening on http://127.0.0.1:{port} (v{version}).\n"
-                        f"Blender is active and responding.",
-                    )
-                    return
-        except Exception:
-            pass
+                        else:
+                            err_msg = payload.get("error", {}).get("message", "Unknown error")
+                            messagebox.showerror(
+                                "Connection Test",
+                                f"Bridge reachable, but command execution returned error:\n{err_msg}",
+                            )
+                            return
+                    elif auth_res.status_code in (401, 403):
+                        messagebox.showerror(
+                            "Connection Test",
+                            f"HTTP server is reachable on port {port}, but AUTHENTICATION REJECTED (HTTP {auth_res.status_code}).\n\n"
+                            f"The stored session token does not match the running Blender instance.\n"
+                            f"Restart Blender to re-synchronize session credentials.",
+                        )
+                        return
+                    else:
+                        messagebox.showerror(
+                            "Connection Test",
+                            f"Bridge server reachable, but returned unexpected HTTP {auth_res.status_code} during test command.",
+                        )
+                        return
+        except httpx.ConnectError:
+            messagebox.showwarning(
+                "Connection Test",
+                f"Bridge server is not currently listening on port {port}.\n\n"
+                f"Open Blender to start the bridge automatically.",
+            )
+            return
+        except Exception as err:
+            messagebox.showwarning(
+                "Connection Test",
+                f"Could not connect to Bridge on port {port}: {err}\n\n"
+                f"Open Blender to start the bridge automatically.",
+            )
+            return
 
         messagebox.showwarning(
             "Connection Test",
             f"Bridge server is not currently listening on port {port}.\n\n"
-            "Open Blender to start the bridge automatically.",
+            f"Open Blender to start the bridge automatically.",
         )
 
     def trigger_repair(self):

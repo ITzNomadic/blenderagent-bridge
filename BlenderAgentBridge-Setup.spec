@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('E:/Decalga/Proyecto blender/blenderagent-bridge/dist/blenderagent-mcp.exe', 'dist'), ('E:/Decalga/Proyecto blender/blenderagent-bridge/dist/blenderagent_bridge.zip', 'dist'), ('E:/Decalga/Proyecto blender/blenderagent-bridge/blender_manifest.toml', '.'), ('E:/Decalga/Proyecto blender/blenderagent-bridge/LICENSE', '.')]
+datas = [('E:/Decalga/Proyecto blender/blenderagent-bridge/dist/blenderagent-mcp.exe', 'dist'), ('E:/Decalga/Proyecto blender/blenderagent-bridge/dist/blenderagent_bridge.zip', 'dist'), ('E:/Decalga/Proyecto blender/blenderagent-bridge/dist/SHA256SUMS.txt', 'dist'), ('E:/Decalga/Proyecto blender/blenderagent-bridge/blender_manifest.toml', '.'), ('E:/Decalga/Proyecto blender/blenderagent-bridge/LICENSE', '.')]
 binaries = []
 hiddenimports = ['tomli', 'tomli_w', 'tkinter', 'tkinter.ttk', 'tkinter.messagebox', 'tkinter.filedialog', 'httpx', 'ctypes', 'winreg', 'installer', 'installer.constants', 'installer.detector', 'installer.orchestrator', 'installer.gui', 'installer.addon_manager', 'installer.security_manager', 'installer.adapters', 'installer.adapters.base', 'installer.adapters.antigravity', 'installer.adapters.codex']
 tmp_ret = collect_all('installer')

@@ -63,50 +63,83 @@ class InstallationOrchestrator:
         self.codex_adapter = CodexAdapter()
 
     @staticmethod
-    def _kill_running_runtime() -> None:
-        """Terminate any lingering instances of the standalone MCP launcher so files can be updated."""
-        if sys.platform == "win32":
-            try:
-                subprocess.run(
-                    ["taskkill", "/F", "/IM", MCP_LAUNCHER_EXE_NAME],
-                    capture_output=True,
-                    timeout=5,
-                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-                )
-            except Exception:
-                pass
-            time.sleep(0.3)
+    def _terminate_instance_by_path(target_path: pathlib.Path) -> None:
+        """Terminate only the specific process instance running from target_path."""
+        if sys.platform != "win32" or not target_path.exists():
+            return
+        try:
+            resolved = str(target_path.resolve()).replace("\\", "\\\\")
+            cmd = [
+                "wmic",
+                "process",
+                "where",
+                f"ExecutablePath='{resolved}'",
+                "get",
+                "ProcessId",
+            ]
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            pids = [int(line.strip()) for line in res.stdout.splitlines() if line.strip().isdigit()]
+            for pid in pids:
+                try:
+                    subprocess.run(
+                        ["taskkill", "/F", "/PID", str(pid)],
+                        capture_output=True,
+                        timeout=5,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+                except Exception:
+                    pass
+            if pids:
+                time.sleep(0.3)
+        except Exception:
+            pass
 
     @classmethod
     def _safe_copy_executable(cls, source: pathlib.Path, target: pathlib.Path) -> None:
         """Safely copy or replace an executable file on Windows, handling locks and running instances."""
-        cls._kill_running_runtime()
         target.parent.mkdir(parents=True, exist_ok=True)
 
-        for attempt in range(4):
-            try:
-                if target.exists():
-                    try:
-                        target.unlink(missing_ok=True)
-                    except Exception:
-                        pass
-                shutil.copy2(source, target)
-                return
-            except (PermissionError, OSError):
-                cls._kill_running_runtime()
-                time.sleep(0.4)
-
-        # Fallback for Windows locked files: rename locked target then copy new
+        # 1. First attempt direct overwrite or copy without process termination
         try:
-            temp_old = target.parent / f"{target.name}.old.{int(time.time())}"
+            if target.exists():
+                try:
+                    target.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            shutil.copy2(source, target)
+            return
+        except (PermissionError, OSError):
+            pass
+
+        # 2. On Windows, try atomic rename of locked binary to .old (permitted by NTFS while executing)
+        try:
+            temp_old = target.parent / f"{target.name}.old.{int(time.time())}_{os.getpid()}"
             target.rename(temp_old)
             shutil.copy2(source, target)
             try:
                 temp_old.unlink(missing_ok=True)
             except Exception:
                 pass
-        except Exception as err:
-            raise RuntimeError(f"Could not overwrite {target.name} (file locked by active process): {err}")
+            return
+        except (PermissionError, OSError):
+            pass
+
+        # 3. If rename failed, terminate ONLY the specific instance running this exact file path
+        cls._terminate_instance_by_path(target)
+        for attempt in range(3):
+            try:
+                shutil.copy2(source, target)
+                return
+            except (PermissionError, OSError):
+                time.sleep(0.3)
+
+        raise RuntimeError(f"Could not overwrite {target.name} (file locked by active process): access denied")
 
     def _resolve_asset_dir(self) -> pathlib.Path:
         """Resolve directory containing distribution payloads (works in dev and PyInstaller frozen bundle)."""
@@ -171,6 +204,29 @@ class InstallationOrchestrator:
             if not addon_zip.exists() or addon_zip.stat().st_size == 0:
                 update_step(0, "failed", f"Missing or corrupted addon zip payload: {addon_zip.name}")
                 return False, steps
+
+            # Check cryptographic checksums if SHA256SUMS.txt is present
+            sums_file = dist_dir / "SHA256SUMS.txt"
+            if not sums_file.exists() and hasattr(sys, "_MEIPASS"):
+                candidate_meipass = pathlib.Path(sys._MEIPASS) / "SHA256SUMS.txt"
+                if candidate_meipass.exists():
+                    sums_file = candidate_meipass
+            if sums_file.exists():
+                try:
+                    with open(sums_file, "r", encoding="utf-8") as sf:
+                        for line in sf:
+                            parts = line.strip().split()
+                            if len(parts) >= 2:
+                                expected_hash, fname = parts[0], parts[1]
+                                target_f = dist_dir / fname
+                                if target_f.exists():
+                                    actual_hash = hashlib.sha256(target_f.read_bytes()).hexdigest()
+                                    if actual_hash.lower() != expected_hash.lower():
+                                        update_step(0, "failed", f"Checksum mismatch for {fname}.")
+                                        return False, steps
+                except Exception as err:
+                    update_step(0, "failed", f"Failed verifying payload checksums: {err}")
+                    return False, steps
         else:
             repo_root = pathlib.Path(__file__).parent.parent.resolve()
             addon_src = repo_root / "addon" / ADDON_ID
@@ -277,17 +333,28 @@ class InstallationOrchestrator:
             return False, steps
 
         # 8. Verify MCP
-        update_step(7, "running", "Verifying registration integrity...")
+        update_step(7, "running", "Verifying client configurations...")
         verified_ag = not self.options.install_antigravity or self.antigravity_adapter.verify_registration(target_launcher)
         verified_codex = not self.options.install_codex or self.codex_adapter.verify_registration(target_launcher)
 
-        if verified_ag and verified_codex:
-            update_step(7, "done", "Integrity verified. Ready to use!")
-            self._save_install_manifest(target_launcher)
-            return True, steps
-        else:
+        if not (verified_ag and verified_codex):
             update_step(7, "failed", "Verification failed for one or more registered clients.")
             return False, steps
+
+        # Check if Blender is actively running and bridge is responding
+        live_status = "Client configurations registered. Bridge activates automatically when Blender is opened."
+        try:
+            import httpx
+            with httpx.Client(timeout=1.0) as client:
+                res = client.get(f"http://127.0.0.1:{self.options.port}/api/v1/health")
+                if res.status_code == 200:
+                    live_status = "Client configurations registered. Active Blender bridge detected and responding!"
+        except Exception:
+            pass
+
+        update_step(7, "done", live_status)
+        self._save_install_manifest(target_launcher)
+        return True, steps
 
     def _save_install_manifest(self, launcher_path: pathlib.Path) -> None:
         """Record install manifest for tracking, updates, and clean uninstall."""

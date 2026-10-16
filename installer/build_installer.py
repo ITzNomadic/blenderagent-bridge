@@ -72,10 +72,19 @@ def build_all():
     print("\n[*] Step 3: Compiling BlenderAgentBridge-Setup.exe...")
     setup_name = "BlenderAgentBridge-Setup"
 
+    # Generate intermediate checksums for payload assets
+    intermediate_sums = dist_dir / "SHA256SUMS.txt"
+    with open(intermediate_sums, "w", encoding="utf-8") as f:
+        for art in [launcher_exe, zip_path]:
+            if art.exists():
+                digest = compute_sha256(art)
+                f.write(f"{digest}  {art.name}\n")
+
     # Define bundled assets using Windows ';' separator
     add_data_args = [
         f"--add-data={dist_dir / MCP_LAUNCHER_EXE_NAME};dist",
         f"--add-data={zip_path};dist",
+        f"--add-data={intermediate_sums};dist",
         f"--add-data={repo_root / 'blender_manifest.toml'};.",
         f"--add-data={repo_root / 'LICENSE'};.",
     ]

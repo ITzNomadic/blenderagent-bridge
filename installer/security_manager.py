@@ -148,16 +148,8 @@ def save_session_credentials(
     else:
         session_token = token or generate_secure_token()
 
-    # Encrypt token with DPAPI if available
-    token_bytes = session_token.encode("utf-8")
-    dpapi_blob = dpapi_protect(token_bytes)
-    dpapi_b64 = None
-    if dpapi_blob:
-        import base64
-        dpapi_b64 = base64.b64encode(dpapi_blob).decode("ascii")
-
     payload: Dict[str, Any] = {
-        "version": "0.2.1",
+        "version": "0.2.2",
         "port": int(port),
         "token": session_token,
         "workspace": str(workspace_dir).replace("\\", "/"),
@@ -165,14 +157,14 @@ def save_session_credentials(
         "created_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
-    # Write atomically to workspace
-    tmp_file = session_file.with_suffix(".tmp")
+    # Write atomically to workspace with private permissions
+    tmp_file = session_file.with_name(f"{session_file.name}.tmp.{os.getpid()}_{time.time_ns()}")
     with open(tmp_file, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
 
+    # Restrict ACLs on temp file prior to publication
+    set_windows_private_acls(tmp_file)
     tmp_file.replace(session_file)
-
-    # Restrict ACLs
     set_windows_private_acls(session_file)
 
     return session_file, session_token

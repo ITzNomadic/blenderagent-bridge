@@ -179,6 +179,20 @@ def _atomic_write_json(target_path: pathlib.Path, data: Dict[str, Any]) -> None:
                 os.chmod(tmp_path, 0o600)
             except Exception:
                 pass
+        else:
+            try:
+                user = os.environ.get("USERNAME")
+                if user:
+                    import subprocess
+                    subprocess.run(
+                        ["icacls", str(tmp_path), "/inheritance:r", "/grant:r", f"{user}:(F)"],
+                        capture_output=True,
+                        check=False,
+                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    )
+            except Exception:
+                pass
+
         os.replace(tmp_path, target_path)
 
         if os.name == "nt":
@@ -209,7 +223,7 @@ def write_session_file(token: str, port: int, workspace_dir: str | pathlib.Path)
     base.mkdir(parents=True, exist_ok=True)
     session_file = base / ".blenderagent_session.json"
     data = {
-        "version": "0.2.1",
+        "version": "0.2.2",
         "token": token,
         "port": port,
         "pid": os.getpid(),

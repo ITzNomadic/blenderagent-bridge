@@ -237,43 +237,55 @@ def test_ba014_queue_memory_bounds():
     assert qm._cache_max_size == 200
 
 
+import socket
+
+def _find_free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def test_ba015_health_endpoint_v020_and_metrics():
-    """BA-015: /api/v1/health returns version 0.2.0 and active_tasks metric."""
+    """BA-015: /api/v1/health returns version 0.2.2 and active_tasks metric."""
     import http.client
-    success, msg = bridge_server.start(port=9891, token="a" * 32)
-    assert success
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", 9891)
-        conn.request("GET", "/api/v1/health")
-        resp = conn.getresponse()
-        assert resp.status == 200
-        data = json.loads(resp.read().decode())
-        assert data["version"] == "0.2.1"
-        assert "active_tasks" in data
-        assert "processed_total" in data
-        conn.close()
-    finally:
-        bridge_server.stop()
+    with tempfile.TemporaryDirectory() as td:
+        port = _find_free_port()
+        success, msg = bridge_server.start(port=port, token="a" * 32, workspace_dir=td)
+        assert success
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port)
+            conn.request("GET", "/api/v1/health")
+            resp = conn.getresponse()
+            assert resp.status == 200
+            data = json.loads(resp.read().decode())
+            assert data["version"] == "0.2.2"
+            assert "active_tasks" in data
+            assert "processed_total" in data
+            conn.close()
+        finally:
+            bridge_server.stop()
 
 
 def test_ba016_origin_header_prefix_attack_blocked():
-    """BA-016: Origin like http://localhost:9892.evil.com must be rejected with 403."""
+    """BA-016: Origin like http://localhost:PORT.evil.com must be rejected with 403."""
     import http.client
-    success, msg = bridge_server.start(port=9892, token="a" * 32)
-    assert success
-    try:
-        conn = http.client.HTTPConnection("127.0.0.1", 9892)
-        headers = {
-            "Host": "127.0.0.1:9892",
-            "Origin": "http://localhost:9892.evil.com",
-            "Authorization": f"Bearer {'a' * 32}",
-        }
-        conn.request("GET", "/api/v1/health", headers=headers)
-        resp = conn.getresponse()
-        assert resp.status == 403
-        conn.close()
-    finally:
-        bridge_server.stop()
+    with tempfile.TemporaryDirectory() as td:
+        port = _find_free_port()
+        success, msg = bridge_server.start(port=port, token="a" * 32, workspace_dir=td)
+        assert success
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", port)
+            headers = {
+                "Host": f"127.0.0.1:{port}",
+                "Origin": f"http://localhost:{port}.evil.com",
+                "Authorization": f"Bearer {'a' * 32}",
+            }
+            conn.request("GET", "/api/v1/health", headers=headers)
+            resp = conn.getresponse()
+            assert resp.status == 403
+            conn.close()
+        finally:
+            bridge_server.stop()
 
 
 def test_ba017_blender_agent_error_instantiation():
@@ -382,4 +394,164 @@ def test_c7_orchestrator_frozen_payload_verification():
                 assert success is False
                 assert steps[0].status == "failed"
                 assert "Missing or corrupted" in steps[0].message
+
+
+def test_v21_001_gui_test_connection_diagnostics(monkeypatch):
+    """V21-001: GUI test connection accurately distinguishes active success, 401 auth rejected, and offline."""
+    import httpx
+    from installer.gui import InstallerGUI
+    import tkinter as tk
+
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        gui = InstallerGUI(root)
+
+        # Scenario A: Server returns 401 Unauthorized
+        class Mock401Client:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def get(self, url):
+                class Resp:
+                    status_code = 200
+                    def json(self): return {"status": "healthy", "version": "0.2.2"}
+                return Resp()
+            def post(self, url, headers=None, json=None, timeout=None):
+                class Resp:
+                    status_code = 401
+                    def json(self): return {"status": "error", "error": {"code": "UNAUTHORIZED"}}
+                return Resp()
+
+        reported_errors = []
+        monkeypatch.setattr("tkinter.messagebox.showerror", lambda title, msg: reported_errors.append(msg))
+        monkeypatch.setattr("httpx.Client", lambda timeout=None: Mock401Client())
+
+        with tempfile.TemporaryDirectory() as td:
+            sfile = pathlib.Path(td) / "live_session.json"
+            sfile.write_text(json.dumps({"port": 9876, "token": "a" * 32}), encoding="utf-8")
+            from installer import constants
+            monkeypatch.setattr(constants, "LIVE_SESSION_FILE_PATH", sfile)
+            monkeypatch.setattr(constants, "SESSION_FILE_PATH", sfile)
+            gui.run_test_connection()
+
+        assert len(reported_errors) == 1
+        assert "AUTHENTICATION REJECTED" in reported_errors[0]
+    finally:
+        root.destroy()
+
+
+def test_v21_002_timeout_during_execution_prevents_duplicate_execution():
+    """V21-002: In-flight idempotency reservation is preserved when caller times out while task is RUNNING."""
+    import copy
+    from addon.blenderagent_bridge.queue_manager import _hash_payload
+
+    qm = ExecutionQueueManager(max_queue_size=10)
+    qm.start()
+
+    key = "v21_002_timeout_key"
+
+    exec_count = [0]
+    def mock_slow_execution(t):
+        exec_count[0] += 1
+        time.sleep(0.25)
+        t.status = TaskStatus.COMPLETED
+        t.result_holder["status"] = "success"
+        t.result_holder["data"] = {"exec_count": exec_count[0]}
+        t.done_event.set()
+
+    t1_result = []
+    def caller1():
+        res = qm.submit_task("slow_cmd", {"param": 1}, timeout=0.05, idempotency_key=key)
+        t1_result.append(res)
+
+    th1 = threading.Thread(target=caller1)
+    th1.start()
+
+    def main_thread_worker():
+        t = qm._queue.get(timeout=1.0)
+        with t.lock:
+            t.status = TaskStatus.RUNNING
+        mock_slow_execution(t)
+        with t.lock:
+            final_res = copy.deepcopy(t.result_holder)
+        if t.idempotency_key:
+            with qm._lock:
+                qm._in_flight_idempotency.pop(t.idempotency_key, None)
+                qm._idempotency_cache[t.idempotency_key] = {
+                    "result": final_res,
+                    "command": t.command_name,
+                    "payload_hash": _hash_payload(t.command_name, t.params),
+                    "timestamp": time.time(),
+                }
+
+    th_worker = threading.Thread(target=main_thread_worker)
+    th_worker.start()
+
+    th1.join()
+    assert len(t1_result) == 1
+    assert t1_result[0]["status"] == "error"
+    assert t1_result[0]["error"]["code"] == "EXECUTION_TIMEOUT"
+
+    # Immediately submit second request with same key while main_thread_worker is still running!
+    t2_res = qm.submit_task("slow_cmd", {"param": 1}, timeout=1.0, idempotency_key=key)
+    th_worker.join()
+
+    assert exec_count[0] == 1, "Command should have executed only once despite caller timeout!"
+    assert t2_res["status"] == "success"
+    assert t2_res.get("cached_idempotent") is True
+
+    qm.stop()
+
+
+def test_v21_003_inflight_wait_timeout_returns_error_envelope():
+    """V21-003: Waiting for in-flight task that times out returns error ResponseEnvelope, not status=pending."""
+    from addon.blenderagent_bridge.queue_manager import CommandTask, _hash_payload
+    qm = ExecutionQueueManager(max_queue_size=10)
+    qm.start()
+
+    key = "v21_003_key"
+    dummy_task = CommandTask("long_cmd", {"x": 1}, idempotency_key=key)
+    dummy_task.status = TaskStatus.RUNNING
+    with qm._lock:
+        qm._in_flight_idempotency[key] = (dummy_task, "long_cmd", _hash_payload("long_cmd", {"x": 1}))
+
+    # Second caller waits with tiny timeout (0.02s) on unfinished task
+    res = qm.submit_task("long_cmd", {"x": 1}, timeout=0.02, idempotency_key=key)
+
+    assert res["status"] == "error", "Timed-out in-flight wait MUST return status=error"
+    assert res["error"]["code"] == "TASK_STILL_RUNNING"
+    assert res["task_id"] == dummy_task.task_id
+
+    qm.stop()
+
+
+def test_v21_006_orchestrator_checksum_verification_detects_tampering():
+    """V21-006: Orchestrator fails at step 0 if payload file does not match SHA256SUMS.txt."""
+    import sys
+    from unittest.mock import patch
+    from installer.orchestrator import InstallationOrchestrator, InstallOptions
+    from installer.constants import MCP_LAUNCHER_EXE_NAME, ADDON_ID
+
+    with tempfile.TemporaryDirectory() as td:
+        dist_dir = pathlib.Path(td) / "dist"
+        dist_dir.mkdir()
+
+        exe_file = dist_dir / MCP_LAUNCHER_EXE_NAME
+        exe_file.write_bytes(b"dummy binary data")
+
+        zip_file = dist_dir / f"{ADDON_ID}.zip"
+        zip_file.write_bytes(b"dummy zip data")
+
+        # Create SHA256SUMS.txt with WRONG hash for exe
+        sums_file = dist_dir / "SHA256SUMS.txt"
+        sums_file.write_text(f"{'0' * 64}  {MCP_LAUNCHER_EXE_NAME}\n", encoding="utf-8")
+
+        orch = InstallationOrchestrator(InstallOptions(install_dir=pathlib.Path(td) / "install"))
+        with patch.object(sys, "frozen", True, create=True):
+            with patch.object(orch, "_resolve_asset_dir", return_value=dist_dir):
+                success, steps = orch.run_installation()
+                assert success is False
+                assert steps[0].status == "failed"
+                assert "Checksum mismatch" in steps[0].message
+
 
