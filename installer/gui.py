@@ -419,9 +419,9 @@ class InstallerGUI:
         def on_progress(name: str, status: str, msg: str):
             self.root.after(0, self._update_step_ui, name, status, msg)
 
-        success, _ = orchestrator.run_installation(progress_callback=on_progress)
+        success, steps = orchestrator.run_installation(progress_callback=on_progress)
         time.sleep(0.8)
-        self.root.after(0, self.show_screen_dashboard if success else self._show_install_failed)
+        self.root.after(0, self.show_screen_dashboard if success else lambda: self._show_install_failed(steps))
 
     def _update_step_ui(self, name: str, status: str, msg: str):
         if name in self.step_labels:
@@ -435,8 +435,17 @@ class InstallerGUI:
             elif status == "skipped":
                 icon_lbl.configure(text="–", fg=ModernTheme.TEXT_MUTED)
 
-    def _show_install_failed(self):
-        messagebox.showerror("Installation Error", "Installation did not complete successfully. Check logs or retry.")
+    def _show_install_failed(self, steps=None):
+        detail = ""
+        if steps:
+            for s in steps:
+                if s.status == "failed":
+                    detail = f"\n\nPaso fallido: {s.name}\nDetalle: {s.message}"
+                    break
+        messagebox.showerror(
+            "Installation Error",
+            f"Installation did not complete successfully.{detail}\n\nRevisa el registro en:\n%LOCALAPPDATA%\\BlenderAgentBridge\\installer.log",
+        )
         self.show_screen_welcome()
 
     # =========================================================================

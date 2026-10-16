@@ -165,3 +165,18 @@ def test_system_detector():
     assert isinstance(state.blender_installations, list)
     assert hasattr(state, "antigravity")
     assert hasattr(state, "codex")
+
+
+def test_orchestrator_safe_copy_executable(tmp_path):
+    """Verify _safe_copy_executable can copy and overwrite even existing files cleanly."""
+    src = tmp_path / "source_bin.exe"
+    src.write_bytes(b"NEW_EXECUTABLE_BINARY_DATA")
+
+    dst = tmp_path / "bin" / "target_bin.exe"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(b"OLD_DATA")
+
+    InstallationOrchestrator._safe_copy_executable(src, dst)
+    assert dst.exists()
+    assert dst.read_bytes() == b"NEW_EXECUTABLE_BINARY_DATA"
+

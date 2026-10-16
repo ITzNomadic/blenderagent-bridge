@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import shutil
+import subprocess
 import sys
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -61,6 +62,52 @@ class InstallationOrchestrator:
         self.antigravity_adapter = AntigravityAdapter()
         self.codex_adapter = CodexAdapter()
 
+    @staticmethod
+    def _kill_running_runtime() -> None:
+        """Terminate any lingering instances of the standalone MCP launcher so files can be updated."""
+        if sys.platform == "win32":
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/IM", MCP_LAUNCHER_EXE_NAME],
+                    capture_output=True,
+                    timeout=5,
+                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+                )
+            except Exception:
+                pass
+            time.sleep(0.3)
+
+    @classmethod
+    def _safe_copy_executable(cls, source: pathlib.Path, target: pathlib.Path) -> None:
+        """Safely copy or replace an executable file on Windows, handling locks and running instances."""
+        cls._kill_running_runtime()
+        target.parent.mkdir(parents=True, exist_ok=True)
+
+        for attempt in range(4):
+            try:
+                if target.exists():
+                    try:
+                        target.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                shutil.copy2(source, target)
+                return
+            except (PermissionError, OSError):
+                cls._kill_running_runtime()
+                time.sleep(0.4)
+
+        # Fallback for Windows locked files: rename locked target then copy new
+        try:
+            temp_old = target.parent / f"{target.name}.old.{int(time.time())}"
+            target.rename(temp_old)
+            shutil.copy2(source, target)
+            try:
+                temp_old.unlink(missing_ok=True)
+            except Exception:
+                pass
+        except Exception as err:
+            raise RuntimeError(f"Could not overwrite {target.name} (file locked by active process): {err}")
+
     def _resolve_asset_dir(self) -> pathlib.Path:
         """Resolve directory containing distribution payloads (works in dev and PyInstaller frozen bundle)."""
         if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
@@ -87,9 +134,22 @@ class InstallationOrchestrator:
             StepProgress("verify_mcp", "pending", "Verifying MCP registration integrity"),
         ]
 
+        log_file = DEFAULT_DATA_DIR / "installer.log"
+        try:
+            DEFAULT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with open(log_file, "a", encoding="utf-8") as f:
+                f.write(f"\n--- Installation Run {time.strftime('%Y-%m-%d %H:%M:%S')} ---\n")
+        except Exception:
+            pass
+
         def update_step(idx: int, status: str, msg: str):
             steps[idx].status = status
             steps[idx].message = msg
+            try:
+                with open(log_file, "a", encoding="utf-8") as f:
+                    f.write(f"[{time.strftime('%H:%M:%S')}] [{status.upper()}] {steps[idx].name}: {msg}\n")
+            except Exception:
+                pass
             if progress_callback:
                 progress_callback(steps[idx].name, status, msg)
 
@@ -119,7 +179,7 @@ class InstallationOrchestrator:
         try:
             source_exe = dist_dir / MCP_LAUNCHER_EXE_NAME
             if source_exe.exists():
-                shutil.copy2(source_exe, target_launcher)
+                self._safe_copy_executable(source_exe, target_launcher)
             elif not target_launcher.exists():
                 # For development or non-frozen installations, create launcher script/shim
                 python_exe = sys.executable
