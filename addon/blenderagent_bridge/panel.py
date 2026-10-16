@@ -45,21 +45,16 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
         else:
             row_ctrl.operator("wm.blenderagent_stop_bridge", text="Stop Bridge", icon="PAUSE")
 
-        # 3. Connection & Security Configuration
+        # 3. Connection & Workspace Configuration
         layout.separator()
         box_config = layout.box()
-        box_config.label(text="Configuration & Security", icon="LOCKED")
+        box_config.label(text="Configuration", icon="PREFERENCES")
 
         wm = context.window_manager
         props_target = wm if hasattr(wm, "blenderagent_port") else scene
 
         col = box_config.column(align=True)
         col.prop(props_target, "blenderagent_port", text="Port")
-        
-        row_token = col.row(align=True)
-        row_token.prop(props_target, "blenderagent_token", text="Token")
-        row_token.operator("wm.blenderagent_regenerate_token", text="", icon="FILE_REFRESH")
-
         col.prop(props_target, "blenderagent_workspace_dir", text="Workspace")
 
         # 4. Activity & Metrics
@@ -80,6 +75,13 @@ class VIEW3D_PT_BlenderAgentBridgePanel(Panel):
                 row_entry.label(text=entry["summary"][:24])
         else:
             box_activity.label(text="No recent operations", icon="INFO")
+
+        # 6. Advanced Diagnostics
+        layout.separator()
+        box_diag = layout.box()
+        row_diag = box_diag.row(align=True)
+        row_diag.label(text="Diagnostics", icon="SETTINGS")
+        row_diag.operator("wm.blenderagent_regenerate_token", text="Reset Credential", icon="FILE_REFRESH")
 
 
 PANEL_CLASSES = [

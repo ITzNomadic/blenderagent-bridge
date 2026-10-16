@@ -138,8 +138,15 @@ def save_session_credentials(
     workspace_dir = pathlib.Path(workspace_dir).resolve()
     workspace_dir.mkdir(parents=True, exist_ok=True)
 
-    session_token = token or generate_secure_token()
     session_file = workspace_dir / ".blenderagent_session.json"
+    if token is None and session_file.exists():
+        existing = load_session_credentials(workspace_dir)
+        if existing and existing.get("token") and len(existing["token"]) == 32:
+            session_token = existing["token"]
+        else:
+            session_token = generate_secure_token()
+    else:
+        session_token = token or generate_secure_token()
 
     # Encrypt token with DPAPI if available
     token_bytes = session_token.encode("utf-8")
