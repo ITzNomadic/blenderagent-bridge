@@ -411,12 +411,12 @@ def test_v21_001_gui_test_connection_diagnostics(monkeypatch):
         class Mock401Client:
             def __enter__(self): return self
             def __exit__(self, *args): pass
-            def get(self, url):
+            def get(self, url, *args, **kwargs):
                 class Resp:
                     status_code = 200
                     def json(self): return {"status": "healthy", "version": "0.2.2"}
                 return Resp()
-            def post(self, url, headers=None, json=None, timeout=None):
+            def post(self, url, *args, **kwargs):
                 class Resp:
                     status_code = 401
                     def json(self): return {"status": "error", "error": {"code": "UNAUTHORIZED"}}
@@ -424,7 +424,9 @@ def test_v21_001_gui_test_connection_diagnostics(monkeypatch):
 
         reported_errors = []
         monkeypatch.setattr("tkinter.messagebox.showerror", lambda title, msg: reported_errors.append(msg))
-        monkeypatch.setattr("httpx.Client", lambda timeout=None: Mock401Client())
+        monkeypatch.setattr("tkinter.messagebox.showwarning", lambda title, msg: reported_errors.append(f"WARNING: {msg}"))
+        monkeypatch.setattr("tkinter.messagebox.showinfo", lambda title, msg: reported_errors.append(f"INFO: {msg}"))
+        monkeypatch.setattr("httpx.Client", lambda *args, **kwargs: Mock401Client())
 
         with tempfile.TemporaryDirectory() as td:
             sfile = pathlib.Path(td) / "live_session.json"
@@ -581,6 +583,39 @@ def test_v21_008_i18n_language_detection_and_translation(monkeypatch):
 
         mock_kernel32.GetUserDefaultUILanguage.return_value = 0x0C0A  # es-ES
         assert detect_system_language() == "es"
+
+
+def test_v21_009_decompression_error_fallback(monkeypatch):
+    """V21-009: When httpx raises zlib decompression error, client falls back to raw socket HTTP."""
+    import zlib
+    from mcp_server.client import BlenderBridgeClient
+    from mcp_server.models import ResponseEnvelope
+
+    client = BlenderBridgeClient(token="mock_valid_token_32_chars_12345")
+
+    # Mock httpx.Client to simulate zlib error -3 on client.post
+    class MockFailingHttpxClient:
+        def __init__(self, *args, **kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self, *args): pass
+        def post(self, *args, **kwargs):
+            raise zlib.error("Error -3 while decompressing data: incorrect header check")
+
+    monkeypatch.setattr("httpx.Client", MockFailingHttpxClient)
+
+    # Mock _execute_raw_fallback to return a successful envelope
+    called_fallback = [False]
+    def mock_fallback(endpoint, payload, timeout):
+        called_fallback[0] = True
+        return ResponseEnvelope(status="success", data={"recovered": True}, message="Recovered successfully")
+
+    monkeypatch.setattr(client, "_execute_raw_fallback", mock_fallback)
+
+    res = client.send_command("get_scene_info", {})
+    assert called_fallback[0] is True
+    assert res.status == "success"
+    assert res.data["recovered"] is True
+
 
 
 

@@ -341,8 +341,8 @@ def detect_system_state() -> SystemDetectionResult:
     import httpx
     is_bridge_running = False
     try:
-        with httpx.Client(timeout=1.0) as client:
-            resp = client.get("http://127.0.0.1:9876/api/v1/health")
+        with httpx.Client(timeout=1.0, trust_env=False) as client:
+            resp = client.get("http://127.0.0.1:9876/api/v1/health", headers={"Accept-Encoding": "identity"})
             if resp.status_code == 200:
                 is_bridge_running = True
     except Exception:

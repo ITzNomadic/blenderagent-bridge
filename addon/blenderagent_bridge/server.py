@@ -76,6 +76,7 @@ class BridgeHTTPRequestHandler(BaseHTTPRequestHandler):
             self.send_response(status_code)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Encoding", "identity")
             self.send_header("Access-Control-Allow-Origin", f"http://127.0.0.1:{self.server_port}")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, Idempotency-Key")
             self.send_header("X-Content-Type-Options", "nosniff")

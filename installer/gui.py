@@ -632,8 +632,11 @@ class InstallerGUI:
                     pass
 
         try:
-            with httpx.Client(timeout=3.0) as client:
-                res = client.get(f"http://127.0.0.1:{port}/api/v1/health")
+            with httpx.Client(timeout=3.0, trust_env=False) as client:
+                res = client.get(
+                    f"http://127.0.0.1:{port}/api/v1/health",
+                    headers={"Accept-Encoding": "identity"},
+                )
                 if res.status_code == 200:
                     health_info = res.json()
                     version = health_info.get("version", VERSION)
@@ -648,7 +651,10 @@ class InstallerGUI:
                     # Verify authenticated RPC command
                     auth_res = client.post(
                         f"http://127.0.0.1:{port}/api/v1/command",
-                        headers={"Authorization": f"Bearer {token}"},
+                        headers={
+                            "Authorization": f"Bearer {token}",
+                            "Accept-Encoding": "identity",
+                        },
                         json={"command": "get_scene_info", "params": {}},
                         timeout=3.0,
                     )

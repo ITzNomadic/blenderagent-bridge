@@ -1,101 +1,75 @@
-"""HTTP client for communicating with the BlenderAgent Bridge add-on in Blender."""
+"""HTTP client communicating with the in-Blender bridge server."""
 
 from __future__ import annotations
 
 import json
 import os
 import pathlib
+import secrets
 import sys
 import time
 from typing import Any, Dict, Optional, Set
+
 import httpx
 
 from .models import ErrorDetail, ResponseEnvelope
 
 
 class BlenderBridgeClient:
-    """Client for dispatching validated MCP commands to the local Blender Add-on."""
+    """Manages resilient HTTP RPC communication with BlenderAgent Bridge."""
 
     def __init__(
         self,
         host: str = "127.0.0.1",
         port: int = 9876,
-        token: Optional[str] = None,
-        workspace_dir: Optional[str | pathlib.Path] = None,
+        token: str = "",
+        workspace_dir: Optional[pathlib.Path] = None,
     ):
         self.host = host
+        self.port = port
+        self.token = token
+        self.workspace_dir = workspace_dir
         self._explicit_port = port != 9876 or "BLENDERAGENT_PORT" in os.environ
-        self.port = int(os.environ.get("BLENDERAGENT_PORT", port))
-        self._explicit_workspace = workspace_dir is not None
-        self.workspace_dir = pathlib.Path(
-            workspace_dir or os.environ.get("BLENDERAGENT_WORKSPACE", pathlib.Path.cwd() / "workspace")
-        ).resolve()
-        self.token = token or os.environ.get("BLENDERAGENT_TOKEN", "")
         self._rejected_tokens: Set[str] = set()
 
-    def _is_pid_alive(self, pid: Optional[int]) -> bool:
-        """Check if a process ID is currently running on the system."""
-        if not pid or pid <= 0:
-            return True
-        if sys.platform == "win32":
-            try:
-                import ctypes
-                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-                SYNCHRONIZE = 0x00100000
-                h_proc = ctypes.windll.kernel32.OpenProcess(
-                    PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, False, pid
-                )
-                if h_proc:
-                    exit_code = ctypes.c_ulong()
-                    ctypes.windll.kernel32.GetExitCodeProcess(h_proc, ctypes.byref(exit_code))
-                    ctypes.windll.kernel32.CloseHandle(h_proc)
-                    return exit_code.value == 259  # STILL_ACTIVE
-                return False
-            except Exception:
-                return True
-        else:
-            try:
-                os.kill(pid, 0)
-                return True
-            except (OSError, ProcessLookupError):
-                return False
-
     def _discover_session(self, force: bool = False) -> bool:
-        """Attempt auto-discovery of session metadata from workspace or global live session."""
-        if not force and self.token and self.token not in self._rejected_tokens:
+        """Dynamically load port and token from live session or workspace file."""
+        if self.token and not force and self.token not in self._rejected_tokens:
             return True
 
-        candidate_paths = []
-        if self._explicit_workspace:
-            # If caller explicitly requested a workspace, prioritize it
-            candidate_paths.append(self.workspace_dir / ".blenderagent_session.json")
-        else:
-            # Default auto-discovery: Global live session of the running Blender process
-            local_appdata = os.environ.get("LOCALAPPDATA")
-            if local_appdata:
-                candidate_paths.append(pathlib.Path(local_appdata) / "BlenderAgentBridge" / "live_session.json")
-                candidate_paths.append(pathlib.Path(local_appdata) / "BlenderAgentBridge" / "workspace" / ".blenderagent_session.json")
-            if self.workspace_dir:
-                candidate_paths.append(self.workspace_dir / ".blenderagent_session.json")
-            candidate_paths.append(pathlib.Path.home() / ".blenderagent" / "live_session.json")
-            candidate_paths.append(pathlib.Path.cwd() / "workspace" / ".blenderagent_session.json")
+        candidates = []
+        # 1. Global live session file
+        try:
+            local_appdata = pathlib.Path(os.environ.get("LOCALAPPDATA", pathlib.Path.home() / "AppData" / "Local"))
+            candidates.append(local_appdata / "BlenderAgentBridge" / "live_session.json")
+        except Exception:
+            pass
 
-        # Sort candidate files that exist by modification time (most recent first)
-        existing_candidates = [p for p in candidate_paths if p.exists()]
-        existing_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        # 2. Workspace session file
+        if self.workspace_dir:
+            candidates.append(self.workspace_dir / ".blenderagent_session.json")
 
-        for session_file in existing_candidates:
+        # 3. Fallback to default workspace
+        try:
+            default_ws = local_appdata / "BlenderAgentBridge" / "workspace" / ".blenderagent_session.json"
+            candidates.append(default_ws)
+        except Exception:
+            pass
+
+        for path in candidates:
+            if not path or not path.exists():
+                continue
             try:
-                with open(session_file, "r", encoding="utf-8") as f:
+                with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
-                tok = data.get("token")
-                pid = data.get("pid")
-
+                tok = data.get("token", "")
                 if not tok or tok in self._rejected_tokens:
                     continue
 
-                if pid and not self._is_pid_alive(pid):
-                    continue
+                if self._explicit_port:
+                    file_port = int(data.get("port", self.port))
+                    if file_port != self.port:
+                        continue
 
                 self.token = tok
                 self.port = int(data.get("port", self.port))
@@ -112,11 +86,55 @@ class BlenderBridgeClient:
         """Check if Blender bridge HTTP endpoint is alive."""
         self._discover_session()
         try:
-            with httpx.Client(timeout=2.0) as client:
-                res = client.get(f"{self.base_url}/api/v1/health")
+            with httpx.Client(timeout=2.0, trust_env=False) as client:
+                res = client.get(
+                    f"{self.base_url}/api/v1/health",
+                    headers={"Accept-Encoding": "identity"},
+                )
                 return res.status_code == 200
         except Exception:
-            return False
+            try:
+                import http.client
+                conn = http.client.HTTPConnection(self.host, self.port, timeout=2.0)
+                conn.request("GET", "/api/v1/health")
+                r = conn.getresponse()
+                status = r.status
+                conn.close()
+                return status == 200
+            except Exception:
+                return False
+
+    def _execute_raw_fallback(
+        self,
+        endpoint: str,
+        payload: Dict[str, Any],
+        timeout: float,
+    ) -> ResponseEnvelope:
+        """Fallback to standard library http.client to completely bypass proxy and decompression issues."""
+        import http.client
+        import json
+
+        body = json.dumps(payload).encode("utf-8")
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.token}",
+            "Content-Length": str(len(body)),
+            "Accept-Encoding": "identity",
+        }
+        conn = None
+        try:
+            conn = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
+            conn.request("POST", endpoint, body=body, headers=headers)
+            res = conn.getresponse()
+            raw_text = res.read().decode("utf-8", errors="replace")
+            raw_json = json.loads(raw_text)
+            return ResponseEnvelope.model_validate(raw_json)
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     def send_command(
         self,
@@ -137,10 +155,11 @@ class BlenderBridgeClient:
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.token}",
+            "Accept-Encoding": "identity",
         }
 
         try:
-            with httpx.Client(timeout=timeout) as client:
+            with httpx.Client(timeout=timeout, trust_env=False) as client:
                 res = client.post(
                     f"{self.base_url}/api/v1/command",
                     json=payload,
@@ -160,7 +179,15 @@ class BlenderBridgeClient:
                             headers=headers,
                         )
 
-                raw_json = res.json()
+                try:
+                    raw_json = res.json()
+                except Exception as json_err:
+                    # If decompression or JSON stream decode failed, fallback to raw socket HTTP
+                    try:
+                        return self._execute_raw_fallback("/api/v1/command", payload, timeout)
+                    except Exception:
+                        raise json_err
+
                 return ResponseEnvelope.model_validate(raw_json)
 
         except httpx.ConnectError:
@@ -168,7 +195,7 @@ class BlenderBridgeClient:
             old_port = self.port
             if not self._explicit_port and self._discover_session(force=True) and self.port != old_port:
                 try:
-                    with httpx.Client(timeout=timeout) as client:
+                    with httpx.Client(timeout=timeout, trust_env=False) as client:
                         headers["Authorization"] = f"Bearer {self.token}"
                         res = client.post(
                             f"{self.base_url}/api/v1/command",
@@ -204,6 +231,14 @@ class BlenderBridgeClient:
             )
 
         except Exception as exc:
+            exc_str = str(exc).lower()
+            # If decompression error or proxy corruption occurred, fallback to raw standard library connection
+            if "decompress" in exc_str or "header check" in exc_str or "zlib" in exc_str or type(exc).__name__ == "error":
+                try:
+                    return self._execute_raw_fallback("/api/v1/command", payload, timeout)
+                except Exception as fb_exc:
+                    exc = fb_exc
+
             return ResponseEnvelope(
                 status="error",
                 error=ErrorDetail(

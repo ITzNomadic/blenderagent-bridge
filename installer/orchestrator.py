@@ -345,8 +345,11 @@ class InstallationOrchestrator:
         live_status = "Client configurations registered. Bridge activates automatically when Blender is opened."
         try:
             import httpx
-            with httpx.Client(timeout=1.0) as client:
-                res = client.get(f"http://127.0.0.1:{self.options.port}/api/v1/health")
+            with httpx.Client(timeout=1.0, trust_env=False) as client:
+                res = client.get(
+                    f"http://127.0.0.1:{self.options.port}/api/v1/health",
+                    headers={"Accept-Encoding": "identity"},
+                )
                 if res.status_code == 200:
                     live_status = "Client configurations registered. Active Blender bridge detected and responding!"
         except Exception:
