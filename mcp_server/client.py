@@ -35,18 +35,18 @@ class BlenderBridgeClient:
             return True
 
         candidate_paths = []
-        # 1. Primary: Explicitly configured workspace
-        if self.workspace_dir:
-            candidate_paths.append(self.workspace_dir / ".blenderagent_session.json")
-
-        # 2. Secondary: Global system-wide live session
+        # 1. Primary: Global system-wide live session of the active Blender process
         local_appdata = os.environ.get("LOCALAPPDATA")
         if local_appdata:
             candidate_paths.append(pathlib.Path(local_appdata) / "BlenderAgentBridge" / "live_session.json")
             candidate_paths.append(pathlib.Path(local_appdata) / "BlenderAgentBridge" / "workspace" / ".blenderagent_session.json")
 
-        candidate_paths.append(pathlib.Path.cwd() / "workspace" / ".blenderagent_session.json")
+        # 2. Secondary: Explicitly configured workspace
+        if self.workspace_dir:
+            candidate_paths.append(self.workspace_dir / ".blenderagent_session.json")
+
         candidate_paths.append(pathlib.Path.home() / ".blenderagent" / "live_session.json")
+        candidate_paths.append(pathlib.Path.cwd() / "workspace" / ".blenderagent_session.json")
 
         for session_file in candidate_paths:
             if session_file.exists():
